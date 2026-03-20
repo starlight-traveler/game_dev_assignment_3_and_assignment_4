@@ -19,7 +19,8 @@ The fastest way to understand the project is to read these pages in order
 3. [Module Reference](./module-reference.html)
 4. [Mathematics](./mathematics.html)
 5. [Objective B Report](./objective-b-report.html)
-6. [Doom Demo Walkthrough](./demo-guide.html)
+6. [Objective E Scene Graph Guide](./objective-e-guide.html)
+7. [Doom Demo Walkthrough](./demo-guide.html)
 
 ## What The Engine Currently Does
 
