@@ -52,9 +52,9 @@ This distinction matters because scalar multiplication changes the size of a vec
 
 For example
 
-\[
+$$
 2 \cdot (1, 0, 0) = (2, 0, 0)
-\]
+$$
 
 ### Vectors
 
@@ -78,9 +78,9 @@ Source: `src/GameObject.h`
 
 Conceptually, a 3D vector is just an ordered triple
 
-\[
+$$
 \mathbf{v} = (x, y, z)
-\]
+$$
 
 You can think of a vector in two common ways
 
@@ -98,15 +98,15 @@ That second interpretation is especially important in the engine
 
 Vectors are added component by component
 
-\[
+$$
 (x_1, y_1, z_1) + (x_2, y_2, z_2) = (x_1 + x_2, y_1 + y_2, z_1 + z_2)
-\]
+$$
 
 They are subtracted the same way
 
-\[
+$$
 (x_1, y_1, z_1) - (x_2, y_2, z_2) = (x_1 - x_2, y_1 - y_2, z_1 - z_2)
-\]
+$$
 
 This appears constantly in gameplay and rendering math
 
@@ -126,15 +126,15 @@ Source: `src/GameObject.cpp:31`
 
 Mathematically
 
-\[
+$$
 \|\mathbf{v}\| = \sqrt{x^2 + y^2 + z^2}
-\]
+$$
 
 If a vector is `(3, 4, 0)`, then its length is
 
-\[
+$$
 \sqrt{3^2 + 4^2 + 0^2} = 5
-\]
+$$
 
 That is why vector length is a geometric distance measure
 
@@ -144,15 +144,15 @@ The engine often avoids an actual square root when it only needs a comparison
 
 For example, instead of checking whether
 
-\[
+$$
 \|\mathbf{d}\| \le r
-\]
+$$
 
 it can check
 
-\[
+$$
 \mathbf{d} \cdot \mathbf{d} \le r^2
-\]
+$$
 
 This is cheaper and appears in the BVH query path because broad-phase tests may run many times per frame
 
@@ -168,17 +168,17 @@ Source: `src/main.cpp:240`
 
 Mathematically
 
-\[
+$$
 \hat{v} = \frac{\mathbf{v}}{\|\mathbf{v}\|}
-\]
+$$
 
 This appears all over the engine because direction calculations are usually cleaner and more stable with unit vectors
 
 For example, `(3, 4, 0)` normalizes to
 
-\[
+$$
 \left(\frac{3}{5}, \frac{4}{5}, 0\right)
-\]
+$$
 
 That vector points in the same direction, but now its length is 1
 
@@ -210,9 +210,9 @@ Source: `src/SceneGraph.cpp:566`
 
 Mathematically
 
-\[
+$$
 \mathbf{a} \cdot \mathbf{b} = a_x b_x + a_y b_y + a_z b_z
-\]
+$$
 
 Important interpretations
 
@@ -221,9 +221,9 @@ Important interpretations
 
 There is another very important interpretation when both vectors are normalized
 
-\[
+$$
 \mathbf{a} \cdot \mathbf{b} = \cos(\theta)
-\]
+$$
 
 That means
 
@@ -277,7 +277,7 @@ Source: `src/GameObject.cpp:17`
 
 The `glm::mat4(1.0f)` part is the identity matrix
 
-\[
+$$
 I =
 \begin{bmatrix}
 1 & 0 & 0 & 0 \\
@@ -285,7 +285,7 @@ I =
 0 & 0 & 1 & 0 \\
 0 & 0 & 0 & 1
 \end{bmatrix}
-\]
+$$
 
 In practical terms, the identity matrix means "do nothing"
 
@@ -297,17 +297,17 @@ The order of multiplication matters
 
 In this engine
 
-\[
+$$
 M = T R
-\]
+$$
 
 means rotate in local space, then translate into world space
 
 Later in the scene graph
 
-\[
+$$
 W_{child} = W_{parent} L_{child}
-\]
+$$
 
 means the child's local transform is interpreted relative to the parent's world transform
 
@@ -319,9 +319,9 @@ The engine uses 4x4 matrices for 3D transforms because translation cannot be rep
 
 So 3D points are treated as if they had an extra coordinate
 
-\[
+$$
 (x, y, z) \rightarrow (x, y, z, 1)
-\]
+$$
 
 That extra `1` is what allows matrix multiplication to include translation along with rotation and projection
 
@@ -355,9 +355,9 @@ This converts degrees into radians before building the projection matrix
 
 The basic conversion is
 
-\[
+$$
 \text{radians} = \text{degrees} \cdot \frac{\pi}{180}
-\]
+$$
 
 This matters because C++ math functions and most graphics libraries expect radians, not degrees
 
@@ -398,15 +398,15 @@ Source: `src/GameObject.cpp:26-28`
 
 Mathematically this is
 
-\[
+$$
 \mathbf{p}_{new} = \mathbf{p}_{old} + \mathbf{v} \Delta t
-\]
+$$
 
 Where
 
-- \(\mathbf{p}\) is position
-- \(\mathbf{v}\) is velocity
-- \(\Delta t\) is the frame delta in seconds
+- $\mathbf{p}$ is position
+- $\mathbf{v}$ is velocity
+- $\Delta t$ is the frame delta in seconds
 
 This is the simplest explicit Euler step
 
@@ -414,9 +414,9 @@ The key idea is that velocity is measured in units per second
 
 So if an object moves at `(2, 0, 0)` and the frame lasts `0.5` seconds, then the position change is
 
-\[
+$$
 (2, 0, 0) \cdot 0.5 = (1, 0, 0)
-\]
+$$
 
 That is why multiplying by delta time makes motion frame-rate independent
 
@@ -453,19 +453,19 @@ This means
 
 Mathematically
 
-\[
+$$
 \theta = \|\omega\| \Delta t
-\]
+$$
 
-\[
+$$
 \hat{a} = \frac{\omega}{\|\omega\|}
-\]
+$$
 
 Then the engine builds the axis-angle quaternion
 
-\[
+$$
 q = (\hat{a}_x \sin(\theta/2), \hat{a}_y \sin(\theta/2), \hat{a}_z \sin(\theta/2), \cos(\theta/2))
-\]
+$$
 
 You can see that directly in the quaternion constructor
 
@@ -509,9 +509,9 @@ Source: `src/Quaternion.cpp:56-59`
 
 Mathematically that is
 
-\[
+$$
 \mathbf{v}' = q \mathbf{v} q^{-1}
-\]
+$$
 
 where the vector is treated as a pure quaternion with zero scalar part
 
@@ -529,9 +529,9 @@ Source: `src/GameObject.cpp:16-20`
 
 That means the engine currently uses
 
-\[
+$$
 M = T R
-\]
+$$
 
 There is no scale in the generic `GameObject` model yet
 
@@ -598,9 +598,9 @@ Source: `src/SceneGraph.cpp:341-346`
 
 Mathematically
 
-\[
+$$
 W_{child} = W_{parent} L_{child}
-\]
+$$
 
 This is the exact reason child nodes inherit movement from parent nodes
 
@@ -618,13 +618,13 @@ Source: `src/SceneGraph.cpp:22-25`
 
 So each object gets bounds
 
-\[
+$$
 min = c - (r,r,r)
-\]
+$$
 
-\[
+$$
 max = c + (r,r,r)
-\]
+$$
 
 This is not a tight oriented bound, but it is fast and simple
 
@@ -709,9 +709,9 @@ Source: `src/shaders/world.frag:13-18`
 
 Mathematically this is
 
-\[
+$$
 I = I_{ambient} + \max(\mathbf{n} \cdot \mathbf{l}, 0) I_{diffuse}
-\]
+$$
 
 This is simple but completely appropriate for the current assignment
 
