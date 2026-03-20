@@ -1,0 +1,12 @@
+AGENTS.md
+OBJECTIVE.md
+OBJECTIVE.md
+
+*.lgo
+
+# Build files and directories
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
