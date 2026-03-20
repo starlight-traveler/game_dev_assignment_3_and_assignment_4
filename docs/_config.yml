@@ -2,3 +2,7 @@ title: Assignment 2 Engine Documentation
 description: Step-by-step guide to the current game engine, runtime flow, subsystem design, and core mathematics
 markdown: kramdown
 theme: minima
+kramdown:
+  input: GFM
+  math_engine: mathjax
+  syntax_highlighter: rouge

@@ -11,6 +11,51 @@ This page focuses on the core mathematics already present in the codebase
 
 Before looking at the engine-specific formulas, there are a few basic mathematical ideas that appear throughout the code
 
+### Coordinate Space
+
+The engine is working in 3D world space, so almost every important value is measured against three axes
+
+- `x`
+  usually left and right
+- `y`
+  usually up and down
+- `z`
+  usually forward and backward
+
+That means a point like `(4, 2, -1)` means
+
+- 4 units along the X axis
+- 2 units along the Y axis
+- -1 units along the Z axis
+
+When the engine stores an object position, it is really storing where that object sits in this 3D coordinate system
+
+### Scalars Versus Vectors
+
+A scalar is a single number such as
+
+- time
+- speed
+- angle
+- radius
+
+A vector is a collection of components that describe direction and magnitude together
+
+Examples from the engine
+
+- `float delta_seconds`
+- `float bounding_radius`
+- `glm::vec3 position_`
+- `glm::vec3 linear_velocity_`
+
+This distinction matters because scalar multiplication changes the size of a vector without changing its direction
+
+For example
+
+\[
+2 \cdot (1, 0, 0) = (2, 0, 0)
+\]
+
 ### Vectors
 
 Most of the code uses `glm::vec3` for 3D quantities such as
@@ -37,6 +82,38 @@ Conceptually, a 3D vector is just an ordered triple
 \mathbf{v} = (x, y, z)
 \]
 
+You can think of a vector in two common ways
+
+- as a position relative to the origin
+- as a direction and distance
+
+That second interpretation is especially important in the engine
+
+- velocity is a direction plus speed
+- camera forward is a direction
+- light direction is a direction
+- parent-to-child offsets are directions plus distances
+
+### Vector Addition And Subtraction
+
+Vectors are added component by component
+
+\[
+(x_1, y_1, z_1) + (x_2, y_2, z_2) = (x_1 + x_2, y_1 + y_2, z_1 + z_2)
+\]
+
+They are subtracted the same way
+
+\[
+(x_1, y_1, z_1) - (x_2, y_2, z_2) = (x_1 - x_2, y_1 - y_2, z_1 - z_2)
+\]
+
+This appears constantly in gameplay and rendering math
+
+- `target - position` gives the direction from one point to another
+- `position + velocity * dt` advances an object through space
+- `light_pos - frag_pos` gives the direction from a surface point to the light
+
 ### Vector Length
 
 The engine repeatedly uses vector magnitude, especially for angular velocity and distance tests
@@ -52,6 +129,32 @@ Mathematically
 \[
 \|\mathbf{v}\| = \sqrt{x^2 + y^2 + z^2}
 \]
+
+If a vector is `(3, 4, 0)`, then its length is
+
+\[
+\sqrt{3^2 + 4^2 + 0^2} = 5
+\]
+
+That is why vector length is a geometric distance measure
+
+### Squared Length And Squared Distance
+
+The engine often avoids an actual square root when it only needs a comparison
+
+For example, instead of checking whether
+
+\[
+\|\mathbf{d}\| \le r
+\]
+
+it can check
+
+\[
+\mathbf{d} \cdot \mathbf{d} \le r^2
+\]
+
+This is cheaper and appears in the BVH query path because broad-phase tests may run many times per frame
 
 ### Normalization
 
@@ -70,6 +173,30 @@ Mathematically
 \]
 
 This appears all over the engine because direction calculations are usually cleaner and more stable with unit vectors
+
+For example, `(3, 4, 0)` normalizes to
+
+\[
+\left(\frac{3}{5}, \frac{4}{5}, 0\right)
+\]
+
+That vector points in the same direction, but now its length is 1
+
+This matters because many formulas expect pure direction without extra scale mixed in
+
+### Unit Directions
+
+A unit vector is just another name for a normalized vector
+
+The engine depends on unit directions in several places
+
+- camera forward vectors
+- camera right and up vectors
+- quaternion axis construction
+- shader normal vectors
+- shader light directions
+
+If these were not unit length, then formulas like dot products or axis-angle construction would produce misleading results
 
 ### Dot Product
 
@@ -92,6 +219,23 @@ Important interpretations
 - `dot(v, v)` gives squared length
 - `dot(n, l)` measures how aligned two directions are
 
+There is another very important interpretation when both vectors are normalized
+
+\[
+\mathbf{a} \cdot \mathbf{b} = \cos(\theta)
+\]
+
+That means
+
+- close to `1`
+  the vectors point in nearly the same direction
+- close to `0`
+  the vectors are perpendicular
+- close to `-1`
+  the vectors point in opposite directions
+
+That is why Lambert lighting uses `dot(n, l)`: it measures how directly the light hits the surface
+
 ### Cross Product
 
 The cross product is used to build camera basis vectors
@@ -105,6 +249,10 @@ Source: `src/main.cpp:234`
 Mathematically, the cross product returns a vector perpendicular to both inputs
 
 This is why it is useful for constructing camera right and up directions
+
+Its direction follows the right-hand rule, which matters in a right-handed 3D engine
+
+If `forward` and `up` are known, then the cross product gives the sideways axis needed to complete an orthogonal basis
 
 ### Matrices
 
@@ -127,6 +275,56 @@ const glm::mat4 translation = glm::translate(glm::mat4(1.0f), position_);
 
 Source: `src/GameObject.cpp:17`
 
+The `glm::mat4(1.0f)` part is the identity matrix
+
+\[
+I =
+\begin{bmatrix}
+1 & 0 & 0 & 0 \\
+0 & 1 & 0 & 0 \\
+0 & 0 & 1 & 0 \\
+0 & 0 & 0 & 1
+\end{bmatrix}
+\]
+
+In practical terms, the identity matrix means "do nothing"
+
+That makes it the natural starting point for building transforms
+
+### Matrix Multiplication Order
+
+The order of multiplication matters
+
+In this engine
+
+\[
+M = T R
+\]
+
+means rotate in local space, then translate into world space
+
+Later in the scene graph
+
+\[
+W_{child} = W_{parent} L_{child}
+\]
+
+means the child's local transform is interpreted relative to the parent's world transform
+
+This is one of the most important ideas in the codebase because the exact same local transform can produce a different world result depending on its parent chain
+
+### Homogeneous Coordinates
+
+The engine uses 4x4 matrices for 3D transforms because translation cannot be represented cleanly with a 3x3 rotation-only matrix
+
+So 3D points are treated as if they had an extra coordinate
+
+\[
+(x, y, z) \rightarrow (x, y, z, 1)
+\]
+
+That extra `1` is what allows matrix multiplication to include translation along with rotation and projection
+
 ### Trigonometry
 
 The camera direction code uses `sin` and `cos` to convert yaw and pitch angles into a direction vector
@@ -141,6 +339,38 @@ Source: `src/main.cpp:214-216`
 
 That is standard trig-based direction construction from angles
 
+### Degrees Versus Radians
+
+The engine mostly uses radians for rotation math
+
+For example
+
+```cpp
+glm::radians(60.0f)
+```
+
+Source: `src/main.cpp:198`
+
+This converts degrees into radians before building the projection matrix
+
+The basic conversion is
+
+\[
+\text{radians} = \text{degrees} \cdot \frac{\pi}{180}
+\]
+
+This matters because C++ math functions and most graphics libraries expect radians, not degrees
+
+### Why Basic Trig Shows Up In A Game Engine
+
+Trig is how the engine turns angular descriptions into spatial directions
+
+- yaw and pitch become a camera forward vector
+- axis-angle rotations become quaternion components through `sin` and `cos`
+- perspective projection depends on field of view, which is an angle
+
+So even though the engine often works with vectors and matrices directly, trig is still underneath several major systems
+
 ### Why These Basics Matter
 
 These few tools are enough to explain most of the rest of the engine
@@ -150,6 +380,7 @@ These few tools are enough to explain most of the rest of the engine
 - trig converts angles into directions
 - dot and cross products support geometry and lighting
 - normalization keeps direction math stable
+- squared distance checks make repeated spatial queries cheaper
 
 ## 2. Delta Time And Euler Integration
 
@@ -179,11 +410,25 @@ Where
 
 This is the simplest explicit Euler step
 
+The key idea is that velocity is measured in units per second
+
+So if an object moves at `(2, 0, 0)` and the frame lasts `0.5` seconds, then the position change is
+
+\[
+(2, 0, 0) \cdot 0.5 = (1, 0, 0)
+\]
+
+That is why multiplying by delta time makes motion frame-rate independent
+
+If the engine skipped delta time and just added velocity directly every frame, then faster frame rates would make objects move farther per second
+
 ## 3. Angular Velocity To Quaternion Rotation
 
 The engine does not store orientation as yaw, pitch, and roll in the object layer
 
 It stores orientation as a quaternion
+
+This is useful because quaternions avoid some of the instability and axis-order problems that come with Euler-angle accumulation
 
 The key update code is
 
