@@ -5,7 +5,7 @@ title: Objective E Guide
 
 # Objective E Guide
 
-## Short Answer
+## Objective E Status
 
 The current engine satisfies Objective E with
 
@@ -89,7 +89,7 @@ for (SceneNodeId child_id : node.children) {
 
 Source: `src/SceneGraph.cpp:341-346`
 
-That is the exact parent-to-child propagation the Objective E description asks for
+That is the parent-to-child propagation required by the Objective E description
 
 ## Step 3. The Chosen Spatial Structure Is A BVH
 

@@ -101,7 +101,7 @@ public:
 
 Source: `src/GameObject.h`
 
-This tells you the core object model
+This defines the core object model
 
 - objects are polymorphic
 - each object advances itself per frame

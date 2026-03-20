@@ -5,11 +5,11 @@ title: Objective B Report
 
 # Objective B Report
 
-This page documents the current Objective B implementation and the benchmark report required by the assignment
+Objective B implementation notes and benchmark results for the current codebase
 
-## Short Answer
+## Objective B Status
 
-Yes, the current codebase already completes the main implementation requirements for Objective B
+The current codebase completes the main implementation requirements for Objective B
 
 It includes
 
@@ -231,7 +231,7 @@ The metric is elapsed time per outer benchmark iteration
 
 ### Actual Results
 
-I ran the benchmark in the current workspace and generated `docs/objective_b_benchmark.csv`
+The benchmark was run in the current workspace and generated `docs/objective_b_benchmark.csv`
 
 Measured summary
 
@@ -284,10 +284,6 @@ Reasoning
 - the measured performance gap in this benchmark is small
 - the function-pointer approach remains useful as a comparison baseline, but it is not the best long-term engine structure
 
-In other words
-
-> The benchmark shows that function-pointer dispatch can be a little faster in isolation, but the current engine correctly chooses the virtual `GameObject` design because it is more extensible and better aligned with how future game object types will grow.
-
 ## Reproduction Steps
 
 To regenerate the benchmark CSV
@@ -305,8 +301,6 @@ cmake --build build --target objective_b_test
 ```
 
 ## Final Assessment
-
-So the answer is
 
 - yes, the implementation side of Objective B is present
 - yes, the benchmark comparison is present

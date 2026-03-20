@@ -12,15 +12,16 @@ The current project is a small C++ game engine skeleton aimed at RTS-style engin
 - `src/main.cpp` runs the multi-window mesh viewer and engine loop
 - `demo/DoomDemo.cpp` runs a small gameplay demo built on the same rendering and spatial systems
 
-The fastest way to understand the project is to read these pages in order
+Suggested reading order
 
 1. [Architecture](./architecture.html)
 2. [Runtime Flow](./runtime-flow.html)
 3. [Module Reference](./module-reference.html)
 4. [Mathematics](./mathematics.html)
 5. [Objective B Report](./objective-b-report.html)
-6. [Objective E Scene Graph Guide](./objective-e-guide.html)
-7. [Doom Demo Walkthrough](./demo-guide.html)
+6. [Objective C Rendering Guide](./objective-c-guide.html)
+7. [Objective E Scene Graph Guide](./objective-e-guide.html)
+8. [Doom Demo Walkthrough](./demo-guide.html)
 
 ## What The Engine Currently Does
 
@@ -39,7 +40,7 @@ At a high level, the engine already supports
 
 ## The Single Most Important Idea
 
-The codebase is easiest to understand if you keep this data flow in mind
+The codebase is easiest to understand with this data flow in mind
 
 ```text
 SDL window + input
@@ -80,7 +81,7 @@ The most important folders are
 
 ## Recommended Reading Strategy
 
-If you are explaining the engine in a review meeting, walk through it in this order
+Presentation order
 
 1. `src/main.cpp`
 2. `src/Engine.cpp`
