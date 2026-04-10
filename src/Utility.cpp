@@ -67,4 +67,13 @@ const GameObject* findGameObjectByRenderElement(std::uint32_t render_element) {
     }
     return nullptr;
 }
+
+GameObject* findMutableGameObjectByRenderElement(std::uint32_t render_element) {
+    for (const std::unique_ptr<GameObject>& object : g_game_objects) {
+        if (object && object->getRenderElement() == render_element) {
+            return object.get();
+        }
+    }
+    return nullptr;
+}
 }  // namespace utility

@@ -154,11 +154,11 @@ void poll_gl_errors(const char* tag) {
 }
 
 /**
- * @brief Finds the first existing WAV file from a list of candidate paths
+ * @brief Finds the first existing file from a list of candidate paths
  * @param candidates Ordered candidate path list
  * @return First existing path or empty string
  */
-std::string find_first_existing_wav(const std::vector<std::string>& candidates) {
+std::string find_first_existing_path(const std::vector<std::string>& candidates) {
     for (const std::string& candidate : candidates) {
         if (std::filesystem::exists(candidate)) {
             return candidate;
@@ -446,6 +446,40 @@ bool is_button_hit(const SDL_Manager& sdl, std::uint32_t window_id, UiButton but
            mouse_x < (r.x + r.w) &&
            mouse_y >= r.y &&
            mouse_y < (r.y + r.h);
+}
+
+/**
+ * @brief Maps a window click into a simple XZ-plane move target for that window's RTS unit
+ * @param sdl SDL manager instance
+ * @param window_id SDL window id
+ * @param mouse_x Mouse x in window coordinates
+ * @param mouse_y Mouse y in window coordinates
+ * @return World-space target on the XZ plane
+ */
+glm::vec3 command_target_for_click(const SDL_Manager& sdl, std::uint32_t window_id,
+                                   int mouse_x, int mouse_y) {
+    const std::size_t window_index = find_window_index_by_id(sdl, window_id);
+    if (window_index >= sdl.windowCount()) {
+        return glm::vec3(0.0f);
+    }
+
+    SDL_Window* window = sdl.windowAt(window_index);
+    if (!window) {
+        return glm::vec3(0.0f);
+    }
+
+    int width = 1;
+    int height = 1;
+    SDL_GetWindowSize(window, &width, &height);
+    width = std::max(width, 1);
+    height = std::max(height, 1);
+
+    const float normalized_x = (static_cast<float>(mouse_x) / static_cast<float>(width)) * 2.0f - 1.0f;
+    const float normalized_y = 1.0f - (static_cast<float>(mouse_y) / static_cast<float>(height)) * 2.0f;
+    constexpr float kCommandWorldExtent = 3.5f;
+    return glm::vec3(normalized_x * kCommandWorldExtent,
+                     0.0f,
+                     normalized_y * kCommandWorldExtent);
 }
 
 /**
@@ -854,13 +888,15 @@ RenderItem make_render_item_for_window(SDL_Manager& sdl, const std::string& mesh
         vertex_shader_path = std::filesystem::path("..") / "src" / "shaders" / "world.vert";
         fragment_shader_path = std::filesystem::path("..") / "src" / "shaders" / "world.frag";
     }
-    std::filesystem::path texture_path = std::filesystem::path("blender") / "surface.bmp";
-    if (!std::filesystem::exists(texture_path)) {
-        texture_path.clear();
-    }
+    const std::string texture_path = find_first_existing_path({
+        (std::filesystem::path("assets") / "surface.bmp").string(),
+        (std::filesystem::path("blender") / "surface.bmp").string(),
+        (std::filesystem::path("..") / "assets" / "surface.bmp").string(),
+        (std::filesystem::path("..") / "blender" / "surface.bmp").string()
+    });
 
     if (!renderer->initialize(vertex_shader_path.string(), fragment_shader_path.string(),
-                              texture_path.string())) {
+                              texture_path)) {
         LOG_WARNING(get_logger(), "renderer initialization failed for '{}'", mesh_path);
     } else {
         item.renderer = std::move(renderer);
@@ -901,13 +937,22 @@ int main(int argc, char** argv) {
     // initialize audio device and preload one event sound when available
     SoundSystem sound_system;
     int ui_click_sound_index = -1;
-    const std::string ui_click_wav = find_first_existing_wav({
+    const std::string ui_click_wav = find_first_existing_path({
         (std::filesystem::path("audio") / "ui_click.wav").string(),
         (std::filesystem::path("assets") / "ui_click.wav").string(),
-        (std::filesystem::path("blender") / "ui_click.wav").string()
+        (std::filesystem::path("blender") / "ui_click.wav").string(),
+        (std::filesystem::path("..") / "audio" / "ui_click.wav").string(),
+        (std::filesystem::path("..") / "assets" / "ui_click.wav").string(),
+        (std::filesystem::path("..") / "blender" / "ui_click.wav").string()
     });
     if (sound_system.isReady() && !ui_click_wav.empty() && sound_system.loadSound(ui_click_wav)) {
         ui_click_sound_index = 0;
+    } else if (!sound_system.isReady()) {
+        LOG_WARNING(get_logger(), "Audio device not ready; UI click sound disabled");
+    } else if (ui_click_wav.empty()) {
+        LOG_WARNING(get_logger(), "UI click sound not found");
+    } else {
+        LOG_WARNING(get_logger(), "Failed to load UI click sound '{}'", ui_click_wav);
     }
 
     // BVH-backed spatial hierarchy for culling and hierarchical transforms
@@ -1019,8 +1064,31 @@ int main(int argc, char** argv) {
                 }
                 break;
             case SDL_MOUSEBUTTONDOWN:
-                // only left click for our custom ui buttons
-                if (e.button.button == SDL_BUTTON_LEFT) {
+                {
+                    RenderItem* item = find_render_item(render_items, e.button.windowID);
+                    if (!item) {
+                        break;
+                    }
+
+                    if (e.button.button == SDL_BUTTON_RIGHT) {
+                        const glm::vec3 target =
+                            command_target_for_click(sdl, e.button.windowID, e.button.x, e.button.y);
+                        if (issueMoveCommand(item->window_id, target, 1.75f, 0.1f)) {
+                            LOG_INFO(get_logger(),
+                                     "Issued move command for window {} to ({}, {}, {})",
+                                     item->window_id,
+                                     target.x,
+                                     target.y,
+                                     target.z);
+                        }
+                        break;
+                    }
+
+                    // only left click for our custom ui buttons
+                    if (e.button.button != SDL_BUTTON_LEFT) {
+                        break;
+                    }
+
                     // event-driven audio playback for click interactions
                     if (ui_click_sound_index >= 0) {
                         sound_system.playSound(ui_click_sound_index);
@@ -1036,11 +1104,6 @@ int main(int argc, char** argv) {
                         break;
                     }
 
-                    // find which render item this click belongs to
-                    RenderItem* item = find_render_item(render_items, e.button.windowID);
-                    if (!item) {
-                        break;
-                    }
                     if (is_button_hit(sdl, e.button.windowID, UiButton::home,
                                       e.button.x, e.button.y)) {
                         // green button = reload mesh

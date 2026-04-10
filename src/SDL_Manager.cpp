@@ -14,8 +14,8 @@
  */
 namespace {
 /**
- * @brief Returns logger used by SDL manager
- * @return Pointer to logger
+ * @brief returns the logger used by this module
+ * @return logger pointer
  */
 quill::Logger *get_logger() {
   // try get logger by name, this might be null if not setup yet
@@ -34,7 +34,7 @@ quill::Logger *get_logger() {
 } // namespace
 
 /**
- * @brief Access the singleton instance.
+ * @brief returns the singleton instance
  */
 SDL_Manager &SDL_Manager::sdl() {
   // function-static means this builds once n then reuses
@@ -44,7 +44,7 @@ SDL_Manager &SDL_Manager::sdl() {
 }
 
 /**
- * @brief Initialize SDL video subsystem.
+ * @brief starts sdl video and audio and applies platform hints
  */
 SDL_Manager::SDL_Manager()
     : windows_{},
@@ -52,24 +52,22 @@ SDL_Manager::SDL_Manager()
       first_window_id_(0),
       quit_requested_(false),
       glew_initialized_(false) {
-  // Prefer client-side Wayland decorations (title bar + close button) when available.
-  // Only applies to Linux/Wayland; harmless elsewhere but we keep it Linux-only for clarity.
+  // prefer decorated windows on linux wayland when possible
 #if defined(__linux__)
-  // these hints are only for wayland decoration behavior
+  // these hints try to keep title bars and close buttons available
   SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "1");
   SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_PREFER_LIBDECOR, "1");
 #endif
 
-  // If user did not force a backend we try x11 first on Linux for better decorations
-  // on some setups. On macOS/Windows, let SDL pick the platform-default driver.
+  // if the user did not force a backend we try x11 first on linux
+  // this project had better window decorations there on some systems
   const char* requested_driver = SDL_getenv("SDL_VIDEODRIVER");
   bool injected_x11_driver = false;
 #if defined(__linux__)
-  // only set x11 default on linux
+  // only override backend defaults on linux
   injected_x11_driver = (requested_driver == nullptr);
   if (injected_x11_driver) {
-    // On some Hyprland setups, Wayland decorations may be unavailable.
-    // Prefer XWayland for decorated title bars and close buttons.
+    // fall back toward x11 first if the app did not request anything else
     SDL_setenv("SDL_VIDEODRIVER", "x11", 1);
   }
 #else
@@ -78,11 +76,10 @@ SDL_Manager::SDL_Manager()
 #endif
 
   if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-    // keep first error text so fallback logs are useful
+    // keep the first failure text around because we may try a second backend next
     const std::string first_error = SDL_GetError();
     if (injected_x11_driver) {
-      // fallback to wayland if x11 backend is not available
-      // fallback to wayland if x11 backend is not available
+      // if x11 was not available try wayland before giving up
       SDL_setenv("SDL_VIDEODRIVER", "wayland", 1);
       if (SDL_Init(SDL_INIT_VIDEO) == 0) {
         LOG_WARNING(get_logger(),
@@ -102,12 +99,16 @@ SDL_Manager::SDL_Manager()
       throw std::runtime_error("SDL_Init failed");
     }
   }
-  // success init
+  if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
+    // audio is helpful but not fatal for the rest of the app
+    LOG_WARNING(get_logger(), "SDL audio init failed: {}", SDL_GetError());
+  }
+  // at this point the core sdl setup is live
   LOG_INFO(get_logger(), "SDL_Init succeeded");
 }
 
 /**
- * @brief Destroy all windows and shut down SDL.
+ * @brief shuts down windows first then quits sdl
  */
 SDL_Manager::~SDL_Manager() {
   // clean windows + contexts first
@@ -117,11 +118,12 @@ SDL_Manager::~SDL_Manager() {
 }
 
 /**
- * @brief Spawn a new SDL window and store its surface.
+ * @brief creates a window using a simple staggered placement grid
  */
 bool SDL_Manager::spawnWindow(const std::string &title, int width, int height,
                               SDL_bool resizable) {
-  // fallback placement if caller does not care about exact screen layout
+  // if the caller does not care about exact coordinates
+  // spread windows out a bit so they do not stack directly on top of each other
   const int index = static_cast<int>(windows_.size());
   const int x_gap = 40;
   const int y_gap = 60;
@@ -135,9 +137,9 @@ bool SDL_Manager::spawnWindow(const std::string &title, int width, int height,
 
 bool SDL_Manager::spawnWindowAt(const std::string &title, int width, int height, int x, int y,
                                 SDL_bool resizable) {
-  // setup GL attrs before each create so new windows match config
-  // every mesh window is GL now, so each one can render
-  // request core 4.1, matches shader version in code
+  // set gl attributes before creation so the new context matches renderer expectations
+  // every window in this project is a gl window
+  // request core 4 1 to match the renderer setup
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,
@@ -145,12 +147,12 @@ bool SDL_Manager::spawnWindowAt(const std::string &title, int width, int height,
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
   SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 
-  // base flags, shown + focusable
+  // base flags make the window visible and able to receive input
   Uint32 flags = SDL_WINDOW_SHOWN | SDL_WINDOW_INPUT_FOCUS;
-  // always create GL window for this project
+  // renderer expects opengl so every window gets a gl context
   flags |= SDL_WINDOW_OPENGL;
   if (resizable == SDL_TRUE) {
-    // allow resize if caller asked
+    // opt in to resize support when requested
     flags |= SDL_WINDOW_RESIZABLE;
   }
 
@@ -158,26 +160,26 @@ bool SDL_Manager::spawnWindowAt(const std::string &title, int width, int height,
       SDL_CreateWindow(title.c_str(), x, y, width, height, flags);
 
   if (!window) {
-    // creation fail
+    // window allocation failed before any context existed
     LOG_ERROR(get_logger(), "SDL_CreateWindow failed: {}", SDL_GetError());
     return false;
   }
 
   if (resizable == SDL_TRUE) {
-    // keep behavior explicit even if resizable flag already set
+    // keep resize behavior explicit
     SDL_SetWindowResizable(window, SDL_TRUE);
   }
 
-  // each window gets its own GL context
+  // each stored window gets its own matching gl context
   SDL_GLContext context = SDL_GL_CreateContext(window);
   if (!context) {
-    // if context creation fails, destroy window and return
+    // without a context the window is useless for this renderer
     LOG_ERROR(get_logger(), "SDL_GL_CreateContext failed: {}", SDL_GetError());
     SDL_DestroyWindow(window);
     return false;
   }
   if (SDL_GL_MakeCurrent(window, context) != 0) {
-    // failed to make context current, cleanup
+    // glew and later gl calls need the new context to be current first
     LOG_ERROR(get_logger(), "SDL_GL_MakeCurrent failed: {}", SDL_GetError());
     SDL_GL_DeleteContext(context);
     SDL_DestroyWindow(window);
@@ -185,7 +187,8 @@ bool SDL_Manager::spawnWindowAt(const std::string &title, int width, int height,
   }
 
   if (!glew_initialized_) {
-    // glew only needs init once per process
+    // glew loads function pointers after at least one real context exists
+    // once loaded it does not need to run again for every window
     glewExperimental = GL_TRUE;
     GLenum glew_error = glewInit();
     if (glew_error != GLEW_OK) {
@@ -196,17 +199,17 @@ bool SDL_Manager::spawnWindowAt(const std::string &title, int width, int height,
       SDL_DestroyWindow(window);
       return false;
     }
-    // glew sometimes leaves a GL error, clear it
+    // glew can leave a harmless gl error flag behind so clear it once here
     glGetError();
     glew_initialized_ = true;
   }
 
   if (windows_.empty()) {
-    // first created window id is special, closing it ends app
+    // the first window acts like the main application window
     first_window_id_ = SDL_GetWindowID(window);
   }
 
-  // toss ptr+context into vectors in same order
+  // store window and context at matching indexes
   windows_.push_back(window);
   gl_contexts_.push_back(context);
 
@@ -217,24 +220,25 @@ bool SDL_Manager::spawnWindowAt(const std::string &title, int width, int height,
 }
 
 /**
- * @brief Close a window by ID using swap-and-pop to keep storage contiguous.
+ * @brief closes one tracked window and its matching context
  */
 void SDL_Manager::closeWindow(std::uint32_t window_id) {
-  // linear scan is fine with tiny fixed window count
+  // a linear scan is fine because window counts stay very small here
   for (std::size_t i = 0; i < windows_.size(); ++i) {
     if (!windows_[i] || SDL_GetWindowID(windows_[i]) != window_id) {
       continue;
     }
 
     if (window_id != 0 && window_id == first_window_id_) {
-      // closing the first window should end the app
+      // closing the first created window is treated as a quit request
       quit_requested_ = true;
       first_window_id_ = 0;
     }
 
+    // destroy the context before the window that owns it
     SDL_GL_DeleteContext(gl_contexts_[i]);
     SDL_DestroyWindow(windows_[i]);
-    // erase keeps arrays lined up, no stale indexes
+    // erase both arrays at the same index so window and context pairing stays valid
     windows_.erase(windows_.begin() + static_cast<std::ptrdiff_t>(i));
     gl_contexts_.erase(gl_contexts_.begin() + static_cast<std::ptrdiff_t>(i));
     if (windows_.empty()) {
@@ -247,44 +251,44 @@ void SDL_Manager::closeWindow(std::uint32_t window_id) {
 }
 
 /**
- * @brief Update all active window surfaces.
+ * @brief swaps buffers on every active window
  */
 void SDL_Manager::updateWindows() {
-  // present every currently active window
+  // present every tracked window once per frame
   for (std::size_t i = 0; i < windows_.size(); ++i) {
     SDL_Window* window = windows_[i];
     if (window && i < gl_contexts_.size() && gl_contexts_[i]) {
-      // each swap needs its matching context current first
+      // each window must have its own context current before swapping
       if (SDL_GL_MakeCurrent(window, gl_contexts_[i]) != 0) {
         LOG_WARNING(get_logger(), "SDL_GL_MakeCurrent failed during swap: {}", SDL_GetError());
         continue;
       }
-      // swap buffers so rendered image shows
+      // swap front and back buffers so the newly rendered frame becomes visible
       SDL_GL_SwapWindow(window);
     }
   }
 }
 
 /**
- * @brief Refresh surface after a resize, since the old surface is invalid.
+ * @brief legacy noop because this project no longer uses software surfaces
  */
 void SDL_Manager::refreshWindowBuffer(std::uint32_t window_id) {
-  // no software buffers used now, so this is noop
+  // no software buffers are tracked anymore
   (void)window_id;
 }
 
 bool SDL_Manager::hasOpenGLContext() const { return !gl_contexts_.empty(); }
 
 /**
- * @brief Makes stored OpenGL context current on the OpenGL window
- * @return True when context is current and ready for GL calls
+ * @brief makes the first window context current
+ * @return true when gl calls can target that context
  */
 bool SDL_Manager::makeOpenGLCurrent() const {
   if (windows_.empty() || gl_contexts_.empty()) {
     // no windows means no context
     return false;
   }
-  // use the first window/context pair
+  // first window acts as the default current context target
   return SDL_GL_MakeCurrent(windows_.front(), gl_contexts_.front()) == 0;
 }
 
@@ -293,12 +297,13 @@ bool SDL_Manager::makeOpenGLCurrentAt(std::size_t index) const {
     // index out of range
     return false;
   }
-  // make this window's context current
+  // switch current gl state to the selected window
   return SDL_GL_MakeCurrent(windows_[index], gl_contexts_[index]) == 0;
 }
 
 SDL_Window *SDL_Manager::openGLWindow() const {
-  // legacy helper; first window is "main" one
+  // compatibility helper
+  // first window is treated as the main one
   if (windows_.empty()) {
     return nullptr;
   }
@@ -307,54 +312,54 @@ SDL_Window *SDL_Manager::openGLWindow() const {
 }
 
 /**
- * @brief Return a window pointer by index.
+ * @brief returns a raw window pointer by index
  */
 SDL_Window *SDL_Manager::windowAt(std::size_t index) const {
   if (index >= windows_.size()) {
     // bad index
     return nullptr;
   }
-  // return raw pointer
+  // caller only borrows the pointer
   return windows_[index];
 }
 
 /**
- * @brief Return a window surface pointer by index.
+ * @brief returns a software surface pointer for old code paths
  */
 SDL_Surface *SDL_Manager::bufferAt(std::size_t index) const {
-  // no software buffer anymore, so return null
+  // software surfaces are not used anymore so this always returns null
   (void)index;
   return nullptr;
 }
 
 /**
- * @brief Return the number of active windows.
+ * @brief returns how many windows are alive right now
  */
 std::size_t SDL_Manager::windowCount() const { return windows_.size(); }
 
 bool SDL_Manager::shouldQuit() const { return quit_requested_; }
 
 /**
- * @brief Destroy all windows and clear arrays.
+ * @brief destroys every tracked context and window during shutdown
  */
 void SDL_Manager::destroyAllWindows() {
-  // cleanup all contexts/windows in order
+  // walk the arrays in order and tear down context first then window
   for (std::size_t i = 0; i < windows_.size(); ++i) {
     if (i < gl_contexts_.size() && gl_contexts_[i]) {
-      // delete GL context first
+      // context must go first because it belongs to the window
       SDL_GL_DeleteContext(gl_contexts_[i]);
       gl_contexts_[i] = nullptr;
     }
     if (windows_[i]) {
-      // destroy window handle
+      // then destroy the native window handle
       SDL_DestroyWindow(windows_[i]);
       windows_[i] = nullptr;
     }
   }
-  // clear vectors to release memory
+  // clear arrays so the manager is fully empty again
   windows_.clear();
   gl_contexts_.clear();
   first_window_id_ = 0;
-  // once all windows are gone, app should exit
+  // no windows left means the app should be considered done
   quit_requested_ = true;
 }

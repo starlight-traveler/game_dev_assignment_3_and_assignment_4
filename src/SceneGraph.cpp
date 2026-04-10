@@ -5,19 +5,19 @@
 
 namespace {
 /**
- * @brief Extracts translation from transform matrix
- * @param transform Matrix to inspect
- * @return Translation vector
+ * @brief pulls the translation part out of a transform matrix
+ * @param transform matrix to inspect
+ * @return translation vector
  */
 glm::vec3 matrix_translation(const glm::mat4& transform) {
     return glm::vec3(transform[3][0], transform[3][1], transform[3][2]);
 }
 
 /**
- * @brief Computes a sphere-backed AABB from a transform and radius
- * @param transform World transform containing the sphere center
- * @param radius Sphere radius
- * @return Pair of minimum and maximum world-space bounds
+ * @brief turns a center plus radius into an axis aligned box
+ * @param transform world transform containing the center
+ * @param radius sphere radius
+ * @return min and max world bounds
  */
 std::pair<glm::vec3, glm::vec3> sphere_bounds(const glm::mat4& transform, float radius) {
     // extract the world-space center of the object from the matrix translation column
@@ -30,11 +30,14 @@ std::pair<glm::vec3, glm::vec3> sphere_bounds(const glm::mat4& transform, float 
 }
 
 /**
- * @brief Computes the squared XZ distance from a point to an AABB
- * @param point Query point in world space
- * @param min_bounds Inclusive minimum AABB corner
- * @param max_bounds Inclusive maximum AABB corner
- * @return Squared distance in the XZ plane
+ * @brief computes squared xz distance from a point to a box
+ * @param point query point
+ * @param min_bounds minimum box corner
+ * @param max_bounds maximum box corner
+ * @return squared distance in xz
+ *
+ * this is used for the circle style bvh query
+ * if the squared distance is greater than radius squared then the whole box misses
  */
 float squared_distance_to_aabb_xz(const glm::vec3& point,
                                   const glm::vec3& min_bounds,
@@ -64,12 +67,12 @@ float squared_distance_to_aabb_xz(const glm::vec3& point,
 }
 
 /**
- * @brief Tests XZ overlap between two AABBs
- * @param min_a Inclusive minimum corner for the first box
- * @param max_a Inclusive maximum corner for the first box
- * @param min_b Inclusive minimum corner for the second box
- * @param max_b Inclusive maximum corner for the second box
- * @return True when the XZ projections overlap
+ * @brief checks whether two boxes overlap in the xz plane
+ * @param min_a minimum corner for the first box
+ * @param max_a maximum corner for the first box
+ * @param min_b minimum corner for the second box
+ * @param max_b maximum corner for the second box
+ * @return true when their xz projections overlap
  */
 bool overlaps_aabb_xz(const glm::vec3& min_a,
                       const glm::vec3& max_a,
@@ -90,7 +93,8 @@ SceneGraph::SceneGraph()
       object_to_node_(),
       spatial_object_nodes_(),
       bvh_nodes_() {
-    // reserve node 0 as a permanent root so hierarchy code always has a valid anchor
+    // node 0 is a permanent synthetic root
+    // that means every real subtree always has a valid parent anchor
     SceneNode root{};
     root.id = 0;
     root.parent = 0;
@@ -104,7 +108,7 @@ SceneGraph::SceneGraph()
 }
 
 SceneNodeId SceneGraph::rootNodeId() const {
-    // node 0 is always the synthetic root created in the constructor
+    // root is always node zero by construction
     return 0;
 }
 
@@ -112,7 +116,8 @@ void SceneGraph::setMaxLeafObjects(std::size_t max_leaf_objects) {
     if (max_leaf_objects == 0) {
         return;
     }
-    // changing the leaf size changes how aggressively the BVH splits
+    // smaller leaves means deeper trees and fewer objects per leaf
+    // larger leaves means shallower trees and more direct object checks per leaf
     max_leaf_objects_ = max_leaf_objects;
     rebuildSpatialIndex();
 }
@@ -126,7 +131,7 @@ SceneNodeId SceneGraph::createNode(SceneNodeId parent,
                                    const glm::mat4& local_transform,
                                    float bounding_radius) {
     if (!isNodeActive(parent)) {
-        // invalid parents fall back to the root so callers do not create dangling nodes
+        // invalid parents collapse to the root so we never create dangling hierarchy links
         parent = rootNodeId();
     }
 
@@ -134,7 +139,8 @@ SceneNodeId SceneGraph::createNode(SceneNodeId parent,
         const auto existing_it = object_to_node_.find(object_reference.value());
         if (existing_it != object_to_node_.end() && isNodeActive(existing_it->second)) {
             const SceneNodeId existing_id = existing_it->second;
-            // object ids stay unique, so reusing an existing id updates the old node in place
+            // object ids stay unique
+            // so asking to create an already mapped object really means update that old node
             nodes_[existing_id].local_transform = local_transform;
             nodes_[existing_id].bounding_radius = std::max(0.0f, bounding_radius);
             setParent(existing_id, parent);
@@ -144,7 +150,7 @@ SceneNodeId SceneGraph::createNode(SceneNodeId parent,
 
     SceneNode node{};
     if (!free_node_ids_.empty()) {
-        // recycle dead node slots to avoid unbounded growth when objects are created and destroyed
+        // recycle a dead slot instead of always growing the vector
         node.id = free_node_ids_.back();
         free_node_ids_.pop_back();
     } else {
@@ -158,16 +164,17 @@ SceneNodeId SceneGraph::createNode(SceneNodeId parent,
     node.bounding_radius = std::max(0.0f, bounding_radius);
     node.active = true;
     if (node.id < nodes_.size()) {
-        // overwrite the recycled slot with the new node payload
+        // recycled slot already exists so overwrite it in place
         nodes_[node.id] = node;
     } else {
         nodes_.push_back(node);
     }
-    // parent owns the child link used by hierarchy traversal
+    // hierarchy traversal walks parent to children
+    // so the parent needs to store this child id
     nodes_[parent].children.push_back(node.id);
 
     if (object_reference.has_value()) {
-        // this map gives fast lookup from game object id to scene node id
+        // this map is what lets gameplay code jump straight from object id to node id
         object_to_node_[object_reference.value()] = node.id;
     }
     return node.id;
@@ -175,37 +182,37 @@ SceneNodeId SceneGraph::createNode(SceneNodeId parent,
 
 bool SceneGraph::setParent(SceneNodeId child, SceneNodeId new_parent) {
     if (!isNodeActive(child) || child == rootNodeId()) {
-        // inactive nodes and the root itself cannot be reparented
+        // root stays fixed and inactive nodes are not meaningful to move
         return false;
     }
     if (!isNodeActive(new_parent)) {
-        // invalid targets collapse to the root instead of failing hard
+        // bad targets fall back to the root instead of leaving the tree broken
         new_parent = rootNodeId();
     }
     if (child == new_parent) {
         return false;
     }
     if (isAncestor(child, new_parent)) {
-        // prevent cycles so the hierarchy always remains a real tree
+        // if child is already above new_parent then linking them would create a cycle
         return false;
     }
 
     SceneNode& child_node = nodes_[child];
     if (child_node.parent == new_parent) {
-        // no work needed when the requested relationship already exists
+        // already parented correctly
         return true;
     }
 
     if (isNodeActive(child_node.parent)) {
         SceneNode& old_parent = nodes_[child_node.parent];
-        // remove the old parent link before adding the new one
+        // remove the old down link before writing the new one
         old_parent.children.erase(
             std::remove(old_parent.children.begin(), old_parent.children.end(), child),
             old_parent.children.end());
     }
 
     child_node.parent = new_parent;
-    // add the child to the destination parent list so future transform recursion sees it
+    // add the new down link so recursive transform propagation sees this node under the new parent
     nodes_[new_parent].children.push_back(child);
     return true;
 }
@@ -233,7 +240,7 @@ bool SceneGraph::removeNodeByObject(std::uint32_t object_reference) {
     if (it == object_to_node_.end()) {
         return false;
     }
-    // removal is recursive because children inherit transforms from the removed parent
+    // deleting a parent without deleting the children would leave a broken subtree
     removeNodeRecursive(it->second);
     return true;
 }
@@ -247,7 +254,8 @@ bool SceneGraph::setLocalTransformByObject(std::uint32_t object_reference, const
     if (node_id >= nodes_.size() || !nodes_[node_id].active) {
         return false;
     }
-    // local transform updates are cheap, world transforms are refreshed in updateWorldTransforms
+    // this only changes the local value
+    // the final world matrix will be recomputed during the next propagation pass
     nodes_[node_id].local_transform = local_transform;
     return true;
 }
@@ -261,44 +269,43 @@ bool SceneGraph::setBoundingRadiusByObject(std::uint32_t object_reference, float
     if (!isNodeActive(node_id)) {
         return false;
     }
-    // broad-phase queries rely on this radius when building the BVH object bounds
+    // bvh bounds come from world position plus this sphere radius
     nodes_[node_id].bounding_radius = std::max(0.0f, bounding_radius);
     return true;
 }
 
 void SceneGraph::updateWorldTransforms() {
-    // start at the synthetic root with identity so each subtree accumulates parent transforms
+    // start recursion from the synthetic root with identity as the incoming parent transform
     updateWorldRecursive(rootNodeId(), glm::mat4(1.0f));
 }
 
 void SceneGraph::rebuildSpatialIndex() {
-    // rebuild from scratch each frame because object positions can change after transform updates
-    // for this assignment scale that is simpler and easier to reason about than incremental BVH edits
-    // conceptually this turns a flat list of active objects into nested spatial boxes
-    // large parent boxes cover many objects and small child boxes cover localized subsets
+    // full rebuild is easy to reason about
+    // gather active object nodes into one flat list then recursively split that list into a bvh
+    // parent boxes become coarse regions
+    // child boxes become finer regions inside them
     // clear the previous frame's flat object list
     spatial_object_nodes_.clear();
     // clear the previous frame's BVH nodes
     bvh_nodes_.clear();
     for (const SceneNode& node : nodes_) {
         if (!node.active || !node.object_reference.has_value()) {
-            // skip helper nodes or dead nodes because they are not renderable spatial objects
+            // helper nodes and inactive nodes do not represent visible spatial objects
             continue;
         }
-        // only object-backed nodes enter the BVH because empty transform helpers do not need culling
-        // store the scene node id rather than copying the whole scene node
+        // store just the scene node id
+        // the real node data stays in nodes_
         spatial_object_nodes_.push_back(node.id);
     }
 
     if (spatial_object_nodes_.empty()) {
-        // no active spatial objects means there is no BVH to build this frame
+        // no objects means no tree
         return;
     }
 
-    // a binary tree storing N leaves needs fewer than 2N nodes so reserve avoids vector churn
+    // reserve enough room so recursion does not keep reallocating as the flat bvh grows
     bvh_nodes_.reserve(spatial_object_nodes_.size() * 2);
-    // the first built node becomes the BVH root at index 0
-    // the recursive builder will keep subdividing until the leaf policy is satisfied
+    // the first recursive build call creates the root node at index zero
     buildBvhRecursive(0, spatial_object_nodes_.size());
 }
 
@@ -331,7 +338,7 @@ void SceneGraph::queryAabb(std::vector<std::uint32_t>& out_objects,
 glm::mat4 SceneGraph::worldTransformForObject(std::uint32_t object_reference) const {
     const auto it = object_to_node_.find(object_reference);
     if (it == object_to_node_.end()) {
-        // callers get identity when the object is not currently mapped into the hierarchy
+        // missing objects get identity as a safe fallback
         return glm::mat4(1.0f);
     }
     const SceneNodeId node_id = it->second;
@@ -342,7 +349,7 @@ glm::mat4 SceneGraph::worldTransformForObject(std::uint32_t object_reference) co
 }
 
 std::size_t SceneGraph::activeObjectCount() const {
-    // object_to_node_ only stores active object-backed nodes
+    // only active object backed nodes stay in this lookup map
     return object_to_node_.size();
 }
 
@@ -356,10 +363,11 @@ void SceneGraph::updateWorldRecursive(SceneNodeId node_id, const glm::mat4& pare
         return;
     }
 
-    // hierarchical transform propagation
-    // each node inherits the accumulated world transform from its parent
+    // this is the core scene graph rule
+    // world transform equals parent world times local transform
     node.world_transform = parent_world * node.local_transform;
     for (SceneNodeId child_id : node.children) {
+        // pass the newly computed world transform down to each child
         updateWorldRecursive(child_id, node.world_transform);
     }
 }
@@ -374,7 +382,7 @@ void SceneGraph::removeNodeRecursive(SceneNodeId node_id) {
         return;
     }
 
-    // copy child ids first because recursive removal mutates child vectors as it unwinds
+    // copy child ids first because recursive calls will mutate the original children vector
     const std::vector<SceneNodeId> child_ids = node.children;
     for (SceneNodeId child_id : child_ids) {
         removeNodeRecursive(child_id);
@@ -383,14 +391,14 @@ void SceneGraph::removeNodeRecursive(SceneNodeId node_id) {
 
     if (isNodeActive(node.parent)) {
         SceneNode& parent = nodes_[node.parent];
-        // detach this node from its parent after its subtree is already cleared
+        // remove this node id from the parent child list
         parent.children.erase(
             std::remove(parent.children.begin(), parent.children.end(), node_id),
             parent.children.end());
     }
 
     if (node.object_reference.has_value()) {
-        // object lookup must be cleared so future queries do not see stale ids
+        // also remove the gameplay lookup entry so no stale object id points here
         object_to_node_.erase(node.object_reference.value());
     }
     node.parent = rootNodeId();
@@ -399,7 +407,7 @@ void SceneGraph::removeNodeRecursive(SceneNodeId node_id) {
     node.world_transform = glm::mat4(1.0f);
     node.bounding_radius = 0.0f;
     node.object_reference = std::nullopt;
-    // remember this slot so createNode can reuse it later
+    // save this slot for later reuse
     free_node_ids_.push_back(node_id);
 }
 
@@ -419,7 +427,7 @@ bool SceneGraph::isAncestor(SceneNodeId ancestor, SceneNodeId node) const {
         }
         const SceneNodeId parent = nodes_[cursor].parent;
         if (parent == cursor) {
-            // reached the synthetic root
+            // once parent points to self we reached the synthetic root
             break;
         }
         if (!isNodeActive(parent)) {
@@ -432,162 +440,154 @@ bool SceneGraph::isAncestor(SceneNodeId ancestor, SceneNodeId node) const {
 
 glm::vec3 SceneGraph::worldPositionForNode(SceneNodeId node_id) const {
     if (!isNodeActive(node_id)) {
-        // invalid nodes contribute a safe zero position
+        // safe fallback for invalid ids
         return glm::vec3(0.0f);
     }
-    // node position is the translation column of the accumulated world transform
+    // world position is stored in the translation column of the world matrix
     return matrix_translation(nodes_[node_id].world_transform);
 }
 
 std::pair<glm::vec3, glm::vec3> SceneGraph::boundsForNode(SceneNodeId node_id) const {
     if (!isNodeActive(node_id)) {
-        // invalid nodes contribute an empty safe box
+        // invalid ids return an empty safe box
         return std::make_pair(glm::vec3(0.0f), glm::vec3(0.0f));
     }
-    // each object is treated as a sphere for broad phase and expanded into an AABB for BVH storage
+    // the broad phase uses a sphere per object because it is cheap
+    // then converts that sphere into an axis aligned box because bvh nodes store boxes
     return sphere_bounds(nodes_[node_id].world_transform, nodes_[node_id].bounding_radius);
 }
 
 std::pair<glm::vec3, glm::vec3> SceneGraph::computeRangeBounds(std::size_t start, std::size_t end) const {
     if (start >= end || end > spatial_object_nodes_.size()) {
-        // invalid ranges return a safe zero box
+        // safe fallback for bad ranges
         return std::make_pair(glm::vec3(0.0f), glm::vec3(0.0f));
     }
 
-    // seed the combined bounds with the first object then expand to contain the rest
-    // this gives the final box for one BVH subtree candidate
+    // start from the first object bounds
+    // then expand until the box contains the whole range
     const auto first_bounds = boundsForNode(spatial_object_nodes_[start]);
     // initialize the running minimum corner from the first object
     glm::vec3 min_bounds = first_bounds.first;
     // initialize the running maximum corner from the first object
     glm::vec3 max_bounds = first_bounds.second;
     for (std::size_t index = start + 1; index < end; ++index) {
-        // fetch the next object's bounding box
+        // read the next object box
         const auto object_bounds = boundsForNode(spatial_object_nodes_[index]);
         // expand the minimum corner component-wise
         min_bounds = glm::min(min_bounds, object_bounds.first);
         // expand the maximum corner component-wise
         max_bounds = glm::max(max_bounds, object_bounds.second);
     }
-    // return the full bounding box that encloses every object in the range
+    // final box now encloses every object assigned to this subtree candidate
     return std::make_pair(min_bounds, max_bounds);
 }
 
 std::pair<glm::vec3, glm::vec3> SceneGraph::computeCentroidBounds(std::size_t start,
                                                                   std::size_t end) const {
     if (start >= end || end > spatial_object_nodes_.size()) {
-        // invalid ranges return a safe zero result
+        // safe fallback for bad ranges
         return std::make_pair(glm::vec3(0.0f), glm::vec3(0.0f));
     }
 
-    // centroid bounds are separate from object bounds because splitting should follow object distribution
-    // use the first centroid as the starting min and max
+    // splitting should follow where object centers are spread out
+    // so this uses centroids rather than full object volume
     glm::vec3 min_centroid = worldPositionForNode(spatial_object_nodes_[start]);
     // both min and max start from the same centroid
     glm::vec3 max_centroid = min_centroid;
     for (std::size_t index = start + 1; index < end; ++index) {
-        // compute the current object's centroid from its world position
+        // centroid is just the world position of the object center
         const glm::vec3 centroid = worldPositionForNode(spatial_object_nodes_[index]);
         // shrink the minimum centroid corner if needed
         min_centroid = glm::min(min_centroid, centroid);
         // grow the maximum centroid corner if needed
         max_centroid = glm::max(max_centroid, centroid);
     }
-    // this box measures spatial spread of object centers only
+    // this measures center spread only and is used to choose a split axis
     return std::make_pair(min_centroid, max_centroid);
 }
 
 std::uint32_t SceneGraph::buildBvhRecursive(std::size_t start, std::size_t end) {
-    // every recursive call owns one contiguous slice of spatial_object_nodes_
-    // that slice represents all objects inside one spatial region of the BVH
-    // compute the final enclosing bounds for this whole slice
+    // each recursive call owns a contiguous slice of spatial_object_nodes_
+    // that slice is the full set of objects that must live under this subtree
+    // first compute the box that encloses that whole slice
     const auto bounds = computeRangeBounds(start, end);
-    // the current BVH node index is just the next slot in the flat node vector
+    // flat storage means the next push_back index becomes this node id
     const std::uint32_t node_index = static_cast<std::uint32_t>(bvh_nodes_.size());
-    // push a provisional leaf node first
-    // if the slice turns out to be splittable, this node will later become an internal node
+    // write a provisional leaf first
+    // if we later decide to split we will convert this same entry into an internal node
     bvh_nodes_.push_back(BvhNode{
-        // min corner of the region covered by this node
+        // region minimum
         bounds.first,
-        // max corner of the region covered by this node
+        // region maximum
         bounds.second,
-        // child indices are placeholders until we decide whether this is internal
+        // child placeholders for now
         0,
         0,
-        // leaves refer back into the flat object slice by start index
+        // leaf begin index into spatial_object_nodes_
         start,
-        // leaves know how many object node ids belong to them
+        // leaf object count
         end - start,
-        // start as a leaf by default
+        // default to leaf until a valid split is found
         true
     });
 
-    // small ranges stay as leaves so traversal can stop and test the contained objects directly
+    // base case
+    // if the slice is already small enough then stop splitting here
     if ((end - start) <= max_leaf_objects_) {
-        // the leaf is already fully configured, so return its index
         return node_index;
     }
 
-    // choose the widest centroid axis so the split follows the longest spread of objects
-    // a BVH tries to separate space into smaller regions that are easier to reject during queries
-    // this is only a heuristic, but it is simple and usually effective
+    // choose the axis where object centers are spread out the most
+    // this is a simple heuristic for making two spatially different halves
     const auto centroid_bounds = computeCentroidBounds(start, end);
-    // extent tells us how much the centroids vary on each axis
+    // extent is the size of the centroid box on each axis
     const glm::vec3 extent = centroid_bounds.second - centroid_bounds.first;
 
-    // default to splitting along X
+    // default split axis is x
     int axis = 0;
     if (extent.y > extent.x && extent.y >= extent.z) {
-        // if Y has the greatest spread, split along Y instead
+        // use y if it spreads farther than x and at least as far as z
         axis = 1;
     } else if (extent.z > extent.x && extent.z >= extent.y) {
-        // if Z has the greatest spread, split along Z instead
+        // otherwise use z if it spreads the farthest
         axis = 2;
     }
 
-    // if all centroids collapse to nearly the same point then another split would be meaningless
+    // if every centroid is almost on top of each other on that axis
+    // a split would not create useful spatial separation
     if (extent[axis] <= 0.0001f) {
-        // keep the node as a leaf because subdivision would not produce useful spatial separation
         return node_index;
     }
 
-    // partition around the median centroid on the chosen axis for a reasonably balanced binary tree
-    // after nth_element, objects on the left half are generally on one side of space
-    // and objects on the right half are generally on the other side
-    // the midpoint is the boundary between those two halves
+    // split around the median on the chosen axis
+    // nth_element is useful here because we only need the middle partition not a full sort
     const std::size_t mid = start + ((end - start) / 2);
     std::nth_element(
-        // beginning of the slice to partition
         spatial_object_nodes_.begin() + static_cast<std::ptrdiff_t>(start),
-        // nth position that should hold the median element after partitioning
         spatial_object_nodes_.begin() + static_cast<std::ptrdiff_t>(mid),
-        // one-past-the-end of the slice to partition
         spatial_object_nodes_.begin() + static_cast<std::ptrdiff_t>(end),
         [this, axis](SceneNodeId left, SceneNodeId right) {
-            // compare centroids along the chosen split axis only
+            // compare only the selected centroid coordinate
             return worldPositionForNode(left)[axis] < worldPositionForNode(right)[axis];
         });
 
-    // safety guard in case the partition fails to produce two non-empty halves
+    // if one side ended up empty then keep this node as a leaf
     if (mid == start || mid == end) {
-        // leave this node as a leaf if the split would be degenerate
         return node_index;
     }
 
-    // internal nodes drop direct object storage and point at two child BVH nodes instead
-    // this is what makes the structure hierarchical
-    // each internal node says "first test my large box, then maybe test my two smaller boxes"
-    // mark the node as internal because it now owns two children instead of direct objects
+    // at this point the split is valid
+    // convert this node from a leaf into an internal parent
+    // internal nodes do not store direct objects
+    // they only store two child indices and one large parent box
     bvh_nodes_[node_index].is_leaf = false;
-    // recursively build the left child over the first half of the object slice
+    // left child covers the first half
     bvh_nodes_[node_index].left_child = buildBvhRecursive(start, mid);
-    // recursively build the right child over the second half of the object slice
+    // right child covers the second half
     bvh_nodes_[node_index].right_child = buildBvhRecursive(mid, end);
-    // internal nodes no longer store a leaf start index
+    // leaf storage fields are meaningless on internal nodes so clear them
     bvh_nodes_[node_index].start = 0;
-    // internal nodes no longer store a leaf object count
     bvh_nodes_[node_index].count = 0;
-    // return the root index for this subtree
     return node_index;
 }
 
@@ -596,59 +596,55 @@ void SceneGraph::queryRadiusRecursive(std::vector<std::uint32_t>& out_objects,
                                       const glm::vec3& center,
                                       float radius) const {
     if (bvh_node_index >= bvh_nodes_.size()) {
-        // invalid indices are ignored defensively
+        // defensive range check
         return;
     }
 
-    // fetch the current BVH node from flat storage
+    // read the current bvh node from flat storage
     const BvhNode& bvh_node = bvh_nodes_[bvh_node_index];
-    // broad phase prune
-    // if the query circle cannot reach this nodes AABB in XZ we can discard the whole subtree
-    // this is the main payoff of a BVH
-    // one cheap test can eliminate many objects at once
+    // this is the big bvh win
+    // one cheap box test can skip an entire subtree of objects
     if (squared_distance_to_aabb_xz(center, bvh_node.min_bounds, bvh_node.max_bounds) >
         (radius * radius)) {
         return;
     }
 
     if (bvh_node.is_leaf) {
-        // leaves store actual object references so this is where narrow broad-phase checks happen
+        // leaves finally test individual objects
         for (std::size_t offset = 0; offset < bvh_node.count; ++offset) {
-            // recover the scene node id stored in this leaf slot
+            // recover the scene node id from the leaf slice
             const SceneNodeId node_id = spatial_object_nodes_[bvh_node.start + offset];
             if (!isNodeActive(node_id)) {
                 // ignore stale ids just in case
                 continue;
             }
 
-            // fetch the full scene node
+            // fetch the full scene node so we can read object id and radius
             const SceneNode& node = nodes_[node_id];
             if (!node.object_reference.has_value()) {
-                // helper nodes should never appear here, but skip them if they do
+                // helper nodes should not appear in the bvh result set
                 continue;
             }
 
-            // compute the object center in world space
+            // object center in world space
             const glm::vec3 world_position = worldPositionForNode(node_id);
-            // reduce the query to the XZ plane because this engine currently broad-tests in ground space
+            // queries operate in ground space so only x and z matter here
             const glm::vec2 delta_xz(world_position.x - center.x,
                                      world_position.z - center.z);
-            // the object radius expands the accepted distance so large objects still get returned
+            // object radius expands the allowed distance so large objects still count
             const float max_distance = radius + node.bounding_radius;
-            // compare squared distance against squared allowed radius
+            // compare squared values to avoid a square root
             if (glm::dot(delta_xz, delta_xz) <= (max_distance * max_distance)) {
-                // append the game-object id rather than the internal scene-node id
+                // output game object ids because callers care about objects not internal node ids
                 out_objects.push_back(node.object_reference.value());
             }
         }
-        // once a leaf is processed, there are no child nodes to recurse into
+        // leaf work is done
         return;
     }
 
-    // recurse into both children because either branch may contain overlapping objects
-    // left child covers one spatial half of this node
+    // parent box overlapped so either child might also overlap
     queryRadiusRecursive(out_objects, bvh_node.left_child, center, radius);
-    // right child covers the other spatial half
     queryRadiusRecursive(out_objects, bvh_node.right_child, center, radius);
 }
 
@@ -657,32 +653,31 @@ void SceneGraph::queryAabbRecursive(std::vector<std::uint32_t>& out_objects,
                                     const glm::vec2& min_xz,
                                     const glm::vec2& max_xz) const {
     if (bvh_node_index >= bvh_nodes_.size()) {
-        // invalid indices are ignored defensively
+        // defensive range check
         return;
     }
 
-    // normalize the query box so min really is the minimum corner
+    // normalize the query corners so callers can pass them in any order
     const float min_x = std::min(min_xz.x, max_xz.x);
     const float min_z = std::min(min_xz.y, max_xz.y);
     const float max_x = std::max(min_xz.x, max_xz.x);
     const float max_z = std::max(min_xz.y, max_xz.y);
 
-    // embed the 2D XZ query in 3D vectors so the same AABB helper can be reused
+    // reuse the same 3d helper by embedding xz into vectors with a dummy y
     const glm::vec3 query_min(min_x, 0.0f, min_z);
     const glm::vec3 query_max(max_x, 0.0f, max_z);
-    // fetch the current BVH node
+    // read the current parent box
     const BvhNode& bvh_node = bvh_nodes_[bvh_node_index];
-    // same broad-phase idea as the radius query but with box-vs-box overlap in XZ
-    // if the parent box misses, every object stored below it also misses
+    // same prune first idea as the circle query
+    // if the parent box misses then every child under it also misses
     if (!overlaps_aabb_xz(query_min, query_max, bvh_node.min_bounds, bvh_node.max_bounds)) {
-        // reject the entire subtree immediately
         return;
     }
 
     if (bvh_node.is_leaf) {
-        // once inside a leaf we test each object volume against the query box
+        // inside a leaf we finally test each object box
         for (std::size_t offset = 0; offset < bvh_node.count; ++offset) {
-            // recover one scene node id from the leaf range
+            // recover one scene node id from the leaf slice
             const SceneNodeId node_id = spatial_object_nodes_[bvh_node.start + offset];
             if (!isNodeActive(node_id)) {
                 // skip stale or dead nodes
@@ -692,24 +687,22 @@ void SceneGraph::queryAabbRecursive(std::vector<std::uint32_t>& out_objects,
             // fetch the full scene node
             const SceneNode& node = nodes_[node_id];
             if (!node.object_reference.has_value()) {
-                // helper nodes are not valid query results
+                // helper nodes are never valid object results
                 continue;
             }
 
-            // compute the object's own broad-phase box
+            // compare the object own box against the query box
             const auto object_bounds = boundsForNode(node_id);
             if (overlaps_aabb_xz(query_min, query_max, object_bounds.first, object_bounds.second)) {
-                // append the object id if its bounds overlap the query box
+                // output the game object id
                 out_objects.push_back(node.object_reference.value());
             }
         }
-        // done with this leaf
+        // leaf finished
         return;
     }
 
-    // internal nodes never hold direct objects so traversal continues down both children
-    // descend into the left subtree first
+    // internal nodes only forward traversal to children
     queryAabbRecursive(out_objects, bvh_node.left_child, min_xz, max_xz);
-    // then descend into the right subtree
     queryAabbRecursive(out_objects, bvh_node.right_child, min_xz, max_xz);
 }

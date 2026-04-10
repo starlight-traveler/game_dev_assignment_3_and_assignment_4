@@ -40,6 +40,26 @@ bool spawnRtsGameObject(std::uint32_t render_element,
                         const glm::vec3& angular_velocity);
 
 /**
+ * @brief Issues a move command to an RTS game object
+ * @param render_element Render element id
+ * @param target_position Destination in world space
+ * @param move_speed Requested speed in world units per second
+ * @param arrival_radius Distance threshold for snapping to the target
+ * @return True when the object accepted the move command
+ */
+bool issueMoveCommand(std::uint32_t render_element,
+                      const glm::vec3& target_position,
+                      float move_speed,
+                      float arrival_radius = 0.05f);
+
+/**
+ * @brief Stops an RTS game object that is currently moving under a command
+ * @param render_element Render element id
+ * @return True when the stop request succeeded
+ */
+bool stopRtsGameObject(std::uint32_t render_element);
+
+/**
  * @brief Removes a game object by render element id
  * @param render_element Render element id
  * @return True when removal succeeds
@@ -62,5 +82,19 @@ void clearActiveGameObjects();
  * @return Model matrix or identity when not found
  */
 glm::mat4 getModelForRenderElement(std::uint32_t render_element);
+
+/**
+ * @brief Gets world position for a render element id
+ * @param render_element Render element id
+ * @return Position or zero vector when not found
+ */
+glm::vec3 getPositionForRenderElement(std::uint32_t render_element);
+
+/**
+ * @brief Reports whether an RTS game object is currently moving under a command
+ * @param render_element Render element id
+ * @return True when command-driven movement is active
+ */
+bool isRtsGameObjectMoving(std::uint32_t render_element);
 
 #endif

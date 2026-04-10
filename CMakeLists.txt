@@ -66,19 +66,28 @@ endif()
 add_executable(${PROJECT_NAME}
     src/main.cpp
     src/AppLayer.cpp
+    src/BuildingSystem.cpp
     src/Engine.cpp
+    src/FogOfWar.cpp
     src/GameObject.cpp
     src/MeshDiscovery.cpp
     src/MeshLoader.cpp
     src/Quaternion.cpp
     src/Renderer3D.cpp
+    src/RtsAi.cpp
     src/RtsUnit.cpp
+    src/RtsPathfinder.cpp
+    src/RtsCombat.cpp
+    src/RtsEconomy.cpp
+    src/RtsWorld.cpp
+    src/RtsProduction.cpp
     src/SceneGraph.cpp
     src/SDL_Manager.cpp
     src/ShaderProgram.cpp
     src/Shape.cpp
     src/Sound.cpp
     src/SoundSystem.cpp
+    src/TerrainGrid.cpp
     src/Texture2D.cpp
     src/Utility.cpp
 )
@@ -96,12 +105,33 @@ add_executable(doom_demo
     src/Texture2D.cpp
 )
 
+add_executable(rts_demo
+    demo/RTSDemo.cpp
+    src/BuildingSystem.cpp
+    src/FogOfWar.cpp
+    src/RtsAi.cpp
+    src/RtsPathfinder.cpp
+    src/RtsCombat.cpp
+    src/RtsEconomy.cpp
+    src/RtsWorld.cpp
+    src/RtsProduction.cpp
+    src/SceneGraph.cpp
+    src/SDL_Manager.cpp
+    src/ShaderProgram.cpp
+    src/Shape.cpp
+    src/TerrainGrid.cpp
+)
+
 # include dirs for glm
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${GLM_INCLUDE_DIR}
 )
 target_include_directories(doom_demo PRIVATE
+    src
+    ${GLM_INCLUDE_DIR}
+)
+target_include_directories(rts_demo PRIVATE
     src
     ${GLM_INCLUDE_DIR}
 )
@@ -120,12 +150,21 @@ target_link_libraries(doom_demo PRIVATE
     OpenGL::GL
     quill::quill
 )
+target_link_libraries(rts_demo PRIVATE
+    SDL2::SDL2
+    GLEW::GLEW
+    OpenGL::GL
+    quill::quill
+)
 
 # compile defs for quill log level
 target_compile_definitions(${PROJECT_NAME} PRIVATE
     QUILL_COMPILE_ACTIVE_LOG_LEVEL=${QUILL_ACTIVE_LOG_LEVEL_DEFINE}
 )
 target_compile_definitions(doom_demo PRIVATE
+    QUILL_COMPILE_ACTIVE_LOG_LEVEL=${QUILL_ACTIVE_LOG_LEVEL_DEFINE}
+)
+target_compile_definitions(rts_demo PRIVATE
     QUILL_COMPILE_ACTIVE_LOG_LEVEL=${QUILL_ACTIVE_LOG_LEVEL_DEFINE}
 )
 
@@ -166,4 +205,22 @@ if (BUILD_TESTING)
         ${GLM_INCLUDE_DIR}
     )
     add_test(NAME objective_e_test COMMAND objective_e_test)
+
+    add_executable(rts_world_test
+        tests/RtsWorld_test.cpp
+        src/BuildingSystem.cpp
+        src/FogOfWar.cpp
+        src/RtsAi.cpp
+        src/RtsPathfinder.cpp
+        src/RtsCombat.cpp
+        src/RtsEconomy.cpp
+        src/RtsProduction.cpp
+        src/RtsWorld.cpp
+        src/TerrainGrid.cpp
+    )
+    target_include_directories(rts_world_test PRIVATE
+        src
+        ${GLM_INCLUDE_DIR}
+    )
+    add_test(NAME rts_world_test COMMAND rts_world_test)
 endif()

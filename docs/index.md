@@ -38,6 +38,8 @@ At a high level, the engine already supports
 - multi-window SDL plus OpenGL context management
 - event-driven audio playback through an SDL callback mixer
 - a transform hierarchy with BVH-based spatial queries
+- a grid-based terrain data model with movement/buildability properties
+- building footprint placement and occupancy rules
 
 ## The Single Most Important Idea
 
@@ -104,7 +106,7 @@ It does **not** currently include
 - pathfinding
 - unit selection
 - command issuing
-- terrain systems
+- full terrain rendering or terrain-aware pathfinding
 - physics resolution
 - animation blending
 - networking

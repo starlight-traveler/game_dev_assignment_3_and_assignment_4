@@ -95,6 +95,8 @@ struct RenderableObject {
     const Shape* shape;
     // whether the mesh provides texture coordinates at attribute location 2
     bool use_mesh_uv;
+    // renderer determines which shared texture/shader setup this object should use
+    Renderer3D* renderer;
 };
 
 /**
@@ -468,8 +470,12 @@ int main() {
     // request vsync to reduce tearing and keep the demo frame pacing smoother
     SDL_GL_SetSwapInterval(1);
 
-    // renderer owns the shader program, texture, and queued draw flow
+    // default renderer owns the shader program, base texture, and queued draw flow
     Renderer3D renderer{};
+    // wall renderer uses the same shader path but a different texture asset
+    Renderer3D wall_renderer{};
+    // floor renderer lets the arena floor use its own texture
+    Renderer3D floor_renderer{};
     // locate the vertex shader in either run-from-root or run-from-build layouts
     const std::string vertex_shader = find_first_existing_path({
         (std::filesystem::path("src") / "shaders" / "world.vert").string(),
@@ -482,12 +488,30 @@ int main() {
     });
     // locate the surface texture used by the world meshes
     const std::string texture_path = find_first_existing_path({
+        (std::filesystem::path("assets") / "surface.bmp").string(),
         (std::filesystem::path("blender") / "surface.bmp").string(),
+        (std::filesystem::path("..") / "assets" / "surface.bmp").string(),
         (std::filesystem::path("..") / "blender" / "surface.bmp").string()
+    });
+    // locate the stone wall texture
+    const std::string wall_texture_path = find_first_existing_path({
+        (std::filesystem::path("textures") / "576.bmp").string(),
+        (std::filesystem::path("assets") / "576.bmp").string(),
+        (std::filesystem::path("..") / "textures" / "576.bmp").string(),
+        (std::filesystem::path("..") / "assets" / "576.bmp").string()
+    });
+    // locate the lava floor texture
+    const std::string floor_texture_path = find_first_existing_path({
+        (std::filesystem::path("textures") / "lava1.bmp").string(),
+        (std::filesystem::path("assets") / "lava1.bmp").string(),
+        (std::filesystem::path("..") / "textures" / "lava1.bmp").string(),
+        (std::filesystem::path("..") / "assets" / "lava1.bmp").string()
     });
     // stop immediately if the core render assets cannot be initialized
     if (vertex_shader.empty() || fragment_shader.empty() ||
-        !renderer.initialize(vertex_shader, fragment_shader, texture_path)) {
+        !renderer.initialize(vertex_shader, fragment_shader, texture_path) ||
+        !wall_renderer.initialize(vertex_shader, fragment_shader, wall_texture_path) ||
+        !floor_renderer.initialize(vertex_shader, fragment_shader, floor_texture_path)) {
         LOG_ERROR(get_logger(), "Renderer initialization failed for doom demo");
         return 1;
     }
@@ -520,21 +544,39 @@ int main() {
     const std::string gun_wav = find_first_existing_path({
         (std::filesystem::path("audio") / "gunshot.wav").string(),
         (std::filesystem::path("assets") / "gunshot.wav").string(),
-        (std::filesystem::path("blender") / "gunshot.wav").string()
+        (std::filesystem::path("blender") / "gunshot.wav").string(),
+        (std::filesystem::path("..") / "audio" / "gunshot.wav").string(),
+        (std::filesystem::path("..") / "assets" / "gunshot.wav").string(),
+        (std::filesystem::path("..") / "blender" / "gunshot.wav").string()
     });
     // search for the hit confirm wav in the same way
     const std::string hit_wav = find_first_existing_path({
         (std::filesystem::path("audio") / "hit.wav").string(),
         (std::filesystem::path("assets") / "hit.wav").string(),
-        (std::filesystem::path("blender") / "hit.wav").string()
+        (std::filesystem::path("blender") / "hit.wav").string(),
+        (std::filesystem::path("..") / "audio" / "hit.wav").string(),
+        (std::filesystem::path("..") / "assets" / "hit.wav").string(),
+        (std::filesystem::path("..") / "blender" / "hit.wav").string()
     });
     // preload the gun sound if audio is available
     if (sound_system.isReady() && !gun_wav.empty() && sound_system.loadSound(gun_wav)) {
         gun_sound_index = 0;
+    } else if (!sound_system.isReady()) {
+        LOG_WARNING(get_logger(), "Audio device not ready; gunshot sound disabled");
+    } else if (gun_wav.empty()) {
+        LOG_WARNING(get_logger(), "Gunshot sound not found");
+    } else {
+        LOG_WARNING(get_logger(), "Failed to load gunshot sound '{}'", gun_wav);
     }
     // preload the hit sound next so it gets the next library slot
     if (sound_system.isReady() && !hit_wav.empty() && sound_system.loadSound(hit_wav)) {
         hit_sound_index = (gun_sound_index >= 0) ? 1 : 0;
+    } else if (!sound_system.isReady()) {
+        LOG_WARNING(get_logger(), "Audio device not ready; hit sound disabled");
+    } else if (hit_wav.empty()) {
+        LOG_WARNING(get_logger(), "Hit sound not found");
+    } else {
+        LOG_WARNING(get_logger(), "Failed to load hit sound '{}'", hit_wav);
     }
 
     // scene graph stores transform hierarchy plus the BVH used for broad culling
@@ -548,22 +590,22 @@ int main() {
     world_objects.reserve(8);
     // register the floor using the shared box mesh
     world_objects.emplace(kFloorObjectId, RenderableObject{
-        box_mesh.get(), box_mesh->hasAttribute(2)});
+        box_mesh.get(), box_mesh->hasAttribute(2), &floor_renderer});
     // register the north wall
     world_objects.emplace(kWallNorthObjectId, RenderableObject{
-        box_mesh.get(), box_mesh->hasAttribute(2)});
+        box_mesh.get(), box_mesh->hasAttribute(2), &wall_renderer});
     // register the south wall
     world_objects.emplace(kWallSouthObjectId, RenderableObject{
-        box_mesh.get(), box_mesh->hasAttribute(2)});
+        box_mesh.get(), box_mesh->hasAttribute(2), &wall_renderer});
     // register the east wall
     world_objects.emplace(kWallEastObjectId, RenderableObject{
-        box_mesh.get(), box_mesh->hasAttribute(2)});
+        box_mesh.get(), box_mesh->hasAttribute(2), &wall_renderer});
     // register the west wall
     world_objects.emplace(kWallWestObjectId, RenderableObject{
-        box_mesh.get(), box_mesh->hasAttribute(2)});
+        box_mesh.get(), box_mesh->hasAttribute(2), &wall_renderer});
     // register the enemy mesh
     world_objects.emplace(kEnemyObjectId, RenderableObject{
-        enemy_mesh.get(), enemy_mesh->hasAttribute(2)});
+        enemy_mesh.get(), enemy_mesh->hasAttribute(2), &renderer});
 
     // floor transform places a thin box slightly below the origin and scales it into the arena floor
     const glm::mat4 floor_model =
@@ -790,7 +832,7 @@ int main() {
         for (std::uint32_t object_id : render_queue) {
             // translate object ids into the actual mesh pointer and UV flag
             const auto object_it = world_objects.find(object_id);
-            if (object_it == world_objects.end() || !object_it->second.shape) {
+            if (object_it == world_objects.end() || !object_it->second.shape || !object_it->second.renderer) {
                 continue;
             }
 
@@ -803,10 +845,12 @@ int main() {
             command.light_position = light_position;
             command.use_mesh_uv = object_it->second.use_mesh_uv;
             // queue the draw instead of issuing it immediately
-            renderer.enqueue(command);
+            object_it->second.renderer->enqueue(command);
         }
         // submit the queued world draw calls
         renderer.drawQueue();
+        floor_renderer.drawQueue();
+        wall_renderer.drawQueue();
         // draw the simple 2D crosshair overlay
         draw_crosshair(window);
         // update the window title with current health and match state

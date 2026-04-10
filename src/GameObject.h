@@ -28,6 +28,29 @@ public:
     virtual void update(float delta_seconds) = 0;
 
     /**
+     * @brief Issues an RTS-style move command when supported by the concrete object
+     * @param target_position World-space destination
+     * @param move_speed Requested move speed in world units per second
+     * @param arrival_radius Distance at which the object counts as arrived
+     * @return True when the object accepted the command
+     */
+    virtual bool issueMoveCommand(const glm::vec3& target_position,
+                                  float move_speed,
+                                  float arrival_radius);
+
+    /**
+     * @brief Stops active command-driven movement when supported by the concrete object
+     * @return True when the object handled the stop request
+     */
+    virtual bool stopMoveCommand();
+
+    /**
+     * @brief Reports whether the object is currently moving under an RTS command
+     * @return True when a command-driven move is active
+     */
+    virtual bool isMoving() const;
+
+    /**
      * @brief Builds a world model matrix from position and rotation
      * @return Model transform matrix
      */
@@ -38,6 +61,12 @@ public:
      * @return Render element id
      */
     std::uint32_t getRenderElement() const;
+
+    /**
+     * @brief Returns the object's world-space position
+     * @return Current position
+     */
+    glm::vec3 getPosition() const;
 
 protected:
     /**

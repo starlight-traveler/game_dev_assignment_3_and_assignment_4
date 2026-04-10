@@ -1,6 +1,6 @@
 /**
  * @file SDL_Manager.h
- * @brief Singleton wrapper around SDL setup/teardown and window handling
+ * @brief singleton wrapper around sdl startup window creation and gl context ownership
  */
 #ifndef SDL_MANAGER_H
 #define SDL_MANAGER_H
@@ -13,108 +13,114 @@
 #include <vector>
 
 /**
- * @brief RAII-managed SDL singleton that owns windows, surfaces, and optional GL context
+ * @brief global sdl manager for this project
+ *
+ * this class centralizes the messy platform setup work
+ * it starts sdl once
+ * creates windows
+ * creates one gl context per window
+ * swaps buffers every frame
+ * and shuts everything down in one place
  */
 class SDL_Manager {
 public:
     // singleton accessor, only one SDL manager allowed
     // singleton accessor, we dont wanna copy SDL state around
     /**
-     * @brief Returns the singleton SDL manager instance
-     * @return Reference to the global SDL manager
+     * @brief returns the one global sdl manager
+     * @return reference to the singleton instance
      */
     static SDL_Manager& sdl();
 
     /**
-     * @brief Creates a window and stores it in internal storage
-     * @param title Desired window title text
-     * @param width Requested width in pixels
-     * @param height Requested height in pixels
-     * @param resizable SDL boolean controlling resizable behavior
-     * @return True when the window was created successfully
+     * @brief creates a window using automatic staggered placement
+     * @param title window title
+     * @param width requested width in pixels
+     * @param height requested height in pixels
+     * @param resizable whether resizing is allowed
+     * @return true when the window and context were created
      */
     bool spawnWindow(const std::string& title, int width, int height,
                      SDL_bool resizable = SDL_FALSE);
 
     /**
-     * @brief Creates a window at explicit coordinates
-     * @param title Desired window title text
-     * @param width Requested width in pixels
-     * @param height Requested height in pixels
-     * @param x Desired top-left x position in pixels
-     * @param y Desired top-left y position in pixels
-     * @param resizable SDL boolean controlling resizable behavior
-     * @return True when the window was created successfully
+     * @brief creates a window at exact screen coordinates
+     * @param title window title
+     * @param width requested width in pixels
+     * @param height requested height in pixels
+     * @param x top left x position
+     * @param y top left y position
+     * @param resizable whether resizing is allowed
+     * @return true when creation succeeded
      */
     bool spawnWindowAt(const std::string& title, int width, int height, int x, int y,
                        SDL_bool resizable = SDL_FALSE);
 
     /**
-     * @brief Closes a window identified by SDL window id
-     * @param window_id SDL window id to close
+     * @brief closes one window by sdl window id
+     * @param window_id sdl window id
      */
     void closeWindow(std::uint32_t window_id);
 
     /**
-     * @brief Presents all active windows
-     * @details Swaps the OpenGL window and updates software surfaces for non-GL windows
+     * @brief presents every active gl window by swapping its buffers
      */
     void updateWindows();
 
     /**
-     * @brief Refreshes the stored software surface after resize
-     * @param window_id SDL window id that was resized
+     * @brief legacy resize hook kept for compatibility
+     * @param window_id sdl window id that changed size
      */
     void refreshWindowBuffer(std::uint32_t window_id);
 
     /**
-     * @brief Reports whether a valid OpenGL context currently exists
-     * @return True when OpenGL context is present
+     * @brief reports whether at least one gl context exists
+     * @return true when gl is available
      */
     bool hasOpenGLContext() const;
 
     /**
-     * @brief Makes the stored OpenGL context current on the OpenGL window
-     * @return True when SDL_GL_MakeCurrent succeeds
+     * @brief makes the first stored window context current
+     * @return true when sdl accepts the switch
      */
     bool makeOpenGLCurrent() const;
 
     /**
-     * @brief Makes the OpenGL context current for a specific window index
-     * @param index Window index
-     * @return True when SDL_GL_MakeCurrent succeeds
+     * @brief makes the context for one indexed window current
+     * @param index internal window index
+     * @return true when the switch succeeds
      */
     bool makeOpenGLCurrentAt(std::size_t index) const;
 
     /**
-     * @brief Returns the OpenGL window pointer when available
-     * @return OpenGL window pointer or nullptr
+     * @brief returns the first window which acts as the main gl window
+     * @return window pointer or nullptr
      */
     SDL_Window* openGLWindow() const;
 
     /**
-     * @brief Returns a window pointer by internal index
-     * @param index Internal window array index
-     * @return SDL window pointer or nullptr when index is invalid
+     * @brief returns one raw window pointer by internal index
+     * @param index internal window array index
+     * @return sdl window pointer or nullptr
      */
     SDL_Window* windowAt(std::size_t index) const;
 
     /**
-     * @brief Returns a software surface pointer by internal index
-     * @param index Internal window array index
-     * @return SDL surface pointer or nullptr when index is invalid
+     * @brief compatibility getter for old software surface based code
+     * @param index internal window array index
+     * @return software surface pointer or nullptr
      */
     SDL_Surface* bufferAt(std::size_t index) const;
 
     /**
-     * @brief Returns number of currently active windows
-     * @return Active window count
+     * @brief returns how many windows are currently alive
+     * @return active window count
      */
     std::size_t windowCount() const;
 
     /**
-     * @brief Signals whether shutdown was requested by closing the GL window
-     * @return True when app should exit main loop
+     * @brief tells the app when closing windows should end the main loop
+     * @return true when quit was requested
      */
     bool shouldQuit() const;
 
@@ -125,29 +131,29 @@ public:
 
 private:
     /**
-     * @brief Initializes SDL video subsystem and hint configuration
+     * @brief starts sdl and configures platform hints
      */
     SDL_Manager();
 
     /**
-     * @brief Destroys windows and shuts down SDL subsystem
+     * @brief destroys windows and shuts down sdl
      */
     ~SDL_Manager();
 
     /**
-     * @brief Destroys all active windows and resets internal storage
+     * @brief destroys every tracked window and context
      */
     void destroyAllWindows();
 
-    // store window ptrs and GL contexts in same index order
+    // windows_ and gl_contexts_ stay aligned by index
     std::vector<SDL_Window*> windows_;      // same index as gl_contexts_
-    std::vector<SDL_GLContext> gl_contexts_; // per-window GL context
-    // remember the first window id so closing it ends app
+    std::vector<SDL_GLContext> gl_contexts_; // per window gl context
+    // remember the first created window because closing it is treated like app exit
     std::uint32_t first_window_id_;         // id of the very first window created
-    // quit flag used by main loop
+    // simple main loop quit flag
     bool quit_requested_;                   // set when app should close
-    // GLEW init flag, only once
-    bool glew_initialized_;                 // one-time glew boot flag
+    // glew only needs one successful init after the first current context exists
+    bool glew_initialized_;                 // one time glew boot flag
 };
 
 #endif

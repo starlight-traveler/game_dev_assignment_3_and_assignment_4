@@ -62,6 +62,13 @@ void clearGameObjects();
  * @return Pointer to matching object or nullptr
  */
 const GameObject* findGameObjectByRenderElement(std::uint32_t render_element);
+
+/**
+ * @brief Finds a mutable active game object by render element id
+ * @param render_element Render element id
+ * @return Mutable pointer to matching object or nullptr
+ */
+GameObject* findMutableGameObjectByRenderElement(std::uint32_t render_element);
 }  // namespace utility
 
 #endif

@@ -13,6 +13,23 @@ GameObject::GameObject(std::uint32_t render_element,
       linear_velocity_(linear_velocity),
       angular_velocity_(angular_velocity) {}
 
+bool GameObject::issueMoveCommand(const glm::vec3& target_position,
+                                  float move_speed,
+                                  float arrival_radius) {
+    static_cast<void>(target_position);
+    static_cast<void>(move_speed);
+    static_cast<void>(arrival_radius);
+    return false;
+}
+
+bool GameObject::stopMoveCommand() {
+    return false;
+}
+
+bool GameObject::isMoving() const {
+    return false;
+}
+
 glm::mat4 GameObject::getModel() const {
     const glm::mat4 translation = glm::translate(glm::mat4(1.0f), position_);
     const glm::mat4 rotation = static_cast<glm::mat4>(rotation_);
@@ -21,6 +38,10 @@ glm::mat4 GameObject::getModel() const {
 
 std::uint32_t GameObject::getRenderElement() const {
     return render_element_;
+}
+
+glm::vec3 GameObject::getPosition() const {
+    return position_;
 }
 
 void GameObject::integrateVelocity(float delta_seconds) {

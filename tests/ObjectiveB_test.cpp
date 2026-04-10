@@ -33,6 +33,15 @@ bool nearly_equal_vec3(const glm::vec3& a, const glm::vec3& b, float epsilon = 0
 }
 
 /**
+ * @brief Extracts translation from a model matrix
+ * @param matrix Matrix to inspect
+ * @return Translation vector from the last column
+ */
+glm::vec3 translation_from_matrix(const glm::mat4& matrix) {
+    return glm::vec3(matrix[3][0], matrix[3][1], matrix[3][2]);
+}
+
+/**
  * @brief Tests quaternion vector rotation for a 90 degree Y rotation
  * @return True when the rotated vector is correct
  */
@@ -96,7 +105,7 @@ bool test_object_update_and_lookup() {
     // Pull the model matrix back out the same way the renderer would
     // The fourth column holds translation because GLM matrices are column major
     const glm::mat4 model = getModelForRenderElement(1001);
-    const glm::vec3 translation(model[3][0], model[3][1], model[3][2]);
+    const glm::vec3 translation = translation_from_matrix(model);
 
     // Position should now be origin + velocity * delta_seconds = (2, 0, 0)
     const bool moved = nearly_equal_vec3(translation, glm::vec3(2.0f, 0.0f, 0.0f), 0.001f);
@@ -107,11 +116,90 @@ bool test_object_update_and_lookup() {
     // Once removed, querying by the old render element should fall back to an identity model
     // That means the translation portion should read as zero
     const glm::mat4 fallback_model = getModelForRenderElement(1001);
-    const glm::vec3 fallback_translation(fallback_model[3][0], fallback_model[3][1], fallback_model[3][2]);
+    const glm::vec3 fallback_translation = translation_from_matrix(fallback_model);
 
     // Leave the global object buffer in a clean state for anything that runs afterward
     clearActiveGameObjects();
     return moved && removed && nearly_equal_vec3(fallback_translation, glm::vec3(0.0f));
+}
+
+/**
+ * @brief Tests RTS move-command behavior including arrival snap and facing
+ * @return True when the unit moves, faces the target, and stops on arrival
+ */
+bool test_rts_move_command() {
+    clearActiveGameObjects();
+    utility::setFrameDelta(1000, 1.0f);
+
+    const bool spawned = spawnRtsGameObject(1101,
+                                            glm::vec3(0.0f, 0.0f, 0.0f),
+                                            glm::vec3(0.0f),
+                                            glm::vec3(0.0f));
+    if (!spawned || !issueMoveCommand(1101, glm::vec3(0.0f, 0.0f, 5.0f), 2.0f, 0.05f)) {
+        return false;
+    }
+
+    updateActiveGameObjects();
+
+    const glm::vec3 first_step_position = getPositionForRenderElement(1101);
+    if (!nearly_equal_vec3(first_step_position, glm::vec3(0.0f, 0.0f, 2.0f), 0.001f)) {
+        clearActiveGameObjects();
+        return false;
+    }
+
+    const glm::mat4 model = getModelForRenderElement(1101);
+    const glm::vec3 facing_x_axis(model[0][0], model[0][1], model[0][2]);
+    if (!nearly_equal_vec3(facing_x_axis, glm::vec3(0.0f, 0.0f, 1.0f), 0.001f)) {
+        clearActiveGameObjects();
+        return false;
+    }
+
+    if (!isRtsGameObjectMoving(1101)) {
+        clearActiveGameObjects();
+        return false;
+    }
+
+    updateActiveGameObjects();
+    updateActiveGameObjects();
+
+    const glm::vec3 arrived_position = getPositionForRenderElement(1101);
+    const bool arrived = nearly_equal_vec3(arrived_position, glm::vec3(0.0f, 0.0f, 5.0f), 0.001f);
+    const bool stopped = !isRtsGameObjectMoving(1101);
+
+    clearActiveGameObjects();
+    return arrived && stopped;
+}
+
+/**
+ * @brief Tests that a stop command freezes an active RTS move
+ * @return True when the unit remains still after stop is issued
+ */
+bool test_rts_stop_command() {
+    clearActiveGameObjects();
+    utility::setFrameDelta(500, 0.5f);
+
+    const bool spawned = spawnRtsGameObject(1102,
+                                            glm::vec3(0.0f, 0.0f, 0.0f),
+                                            glm::vec3(0.0f),
+                                            glm::vec3(0.0f));
+    if (!spawned || !issueMoveCommand(1102, glm::vec3(10.0f, 0.0f, 0.0f), 4.0f, 0.05f)) {
+        return false;
+    }
+
+    updateActiveGameObjects();
+    const glm::vec3 before_stop = getPositionForRenderElement(1102);
+    if (!stopRtsGameObject(1102)) {
+        clearActiveGameObjects();
+        return false;
+    }
+
+    updateActiveGameObjects();
+    const glm::vec3 after_stop = getPositionForRenderElement(1102);
+    const bool stayed_put = nearly_equal_vec3(before_stop, after_stop, 0.001f);
+    const bool stopped = !isRtsGameObjectMoving(1102);
+
+    clearActiveGameObjects();
+    return stayed_put && stopped;
 }
 }  // namespace
 
@@ -140,6 +228,16 @@ int main() {
     // because that comparison is about runtime cost rather than pass or fail correctness
     if (!test_object_update_and_lookup()) {
         std::cerr << "ObjectiveB test failure: object update and lookup\n";
+        ++failures;
+    }
+
+    if (!test_rts_move_command()) {
+        std::cerr << "ObjectiveB test failure: RTS move command\n";
+        ++failures;
+    }
+
+    if (!test_rts_stop_command()) {
+        std::cerr << "ObjectiveB test failure: RTS stop command\n";
         ++failures;
     }
 

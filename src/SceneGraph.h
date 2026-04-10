@@ -1,6 +1,6 @@
 /**
  * @file SceneGraph.h
- * @brief Hierarchical transform tree with BVH spatial culling for RTS worlds
+ * @brief scene tree plus bvh broad phase used for world transforms and culling
  */
 #ifndef SCENE_GRAPH_H
 #define SCENE_GRAPH_H
@@ -15,71 +15,90 @@
 #include <glm/glm.hpp>
 
 /**
- * @brief Tree node id type used by SceneGraph
+ * @brief integer id used to refer to one scene node
  */
 using SceneNodeId = std::uint32_t;
 
 /**
- * @brief Node for hierarchical transform propagation and object reference
+ * @brief one node inside the transform tree
+ *
+ * each node can optionally point at a game object
+ * and each node can have children
+ * the local transform is relative to the parent
+ * the world transform is the final accumulated transform after propagation
  */
 struct SceneNode {
+    // stable integer id for this slot
     SceneNodeId id;
+    // parent id used for upward links and cycle checks
     SceneNodeId parent;
+    // child ids used for recursive world transform updates
     std::vector<SceneNodeId> children;
+    // optional game object id if this node represents a real object
     std::optional<std::uint32_t> object_reference;
+    // transform relative to the parent node
     glm::mat4 local_transform;
+    // fully accumulated transform in world space
     glm::mat4 world_transform;
+    // simple broad phase sphere radius for this object
     float bounding_radius;
+    // recycled inactive nodes stay in storage but are skipped
     bool active;
 };
 
 /**
- * @brief Scene graph class with tree traversal and BVH render culling
+ * @brief manages hierarchical transforms and a bvh over active object nodes
  *
- * The class does two related but different jobs
- * 1. keep a parent-child transform tree so child nodes inherit parent motion
- * 2. build a bounding volume hierarchy over active object nodes for broad spatial queries
+ * this class does two connected jobs
  *
- * The BVH is a binary tree of bounding boxes
- * - leaf nodes store a contiguous range of object-backed scene nodes
- * - internal nodes store bounds that contain both child nodes
- * - queries first test against the large parent bounds and only descend when overlap exists
+ * first it acts like a normal scene graph
+ * child nodes inherit movement from parent nodes
+ * so moving a parent automatically moves the whole subtree in world space
  *
- * This matters because broad-phase traversal becomes much cheaper than checking every object
- * especially once objects start spreading through a larger RTS-style world
+ * second it builds a bvh
+ * bvh means bounding volume hierarchy
+ * that is just a binary tree of bounding boxes
+ * each internal node covers a large region
+ * each leaf covers a smaller region and stores a short list of objects
+ *
+ * the important bvh idea is prune early
+ * instead of testing every object every frame
+ * we test a large parent box first
+ * if the query misses that box we skip every object under it
+ * that is why this structure gets much cheaper than a flat scan as worlds spread out
  */
 class SceneGraph {
 public:
     /**
-     * @brief Constructs graph root and default BVH configuration
+     * @brief creates the synthetic root node and default bvh settings
      */
     SceneGraph();
 
     /**
-     * @brief Sets the maximum number of objects stored in one BVH leaf
-     * @param max_leaf_objects New positive BVH leaf capacity
+     * @brief changes how many objects are allowed in one leaf before splitting
+     * @param max_leaf_objects positive leaf capacity
      */
     void setMaxLeafObjects(std::size_t max_leaf_objects);
 
     /**
-     * @brief Gets the maximum number of objects stored in one BVH leaf
-     * @return BVH leaf capacity
+     * @brief returns the current leaf capacity setting
+     * @return bvh leaf capacity
      */
     std::size_t maxLeafObjects() const;
 
     /**
-     * @brief Returns the root node id
-     * @return Root id
+     * @brief returns the permanent root node id
+     * @return root id
      */
     SceneNodeId rootNodeId() const;
 
     /**
-     * @brief Creates a node with optional object reference
-     * @param parent Parent node id
-     * @param object_reference Object id from memory pool
-     * @param local_transform Local transform matrix
-     * @param bounding_radius Bounding radius used for culling
-     * @return Created node id
+     * @brief creates or reuses one node under a parent
+     * @param parent parent node id
+     * @param object_reference game object id if this node maps to a real object
+     * @param local_transform transform relative to the parent
+     * @param bounding_radius simple sphere radius used by the bvh
+     * @return created node id
      */
     SceneNodeId createNode(SceneNodeId parent,
                            std::optional<std::uint32_t> object_reference,
@@ -87,209 +106,218 @@ public:
                            float bounding_radius);
 
     /**
-     * @brief Reparents an existing node under another node
-     * @param child Node id to move
-     * @param new_parent New parent node id
-     * @return True when reparent succeeds
+     * @brief reparents one node under another node
+     * @param child node to move
+     * @param new_parent new parent node
+     * @return true when the tree remains valid after the move
      */
     bool setParent(SceneNodeId child, SceneNodeId new_parent);
 
     /**
-     * @brief Reparents an existing object node under another object node
-     * @param child_object_reference Child object id from memory pool
-     * @param parent_object_reference Parent object id or nullopt for root
-     * @return True when reparent succeeds
+     * @brief reparents using game object ids instead of raw node ids
+     * @param child_object_reference child object id
+     * @param parent_object_reference parent object id or nullopt for root
+     * @return true when the move succeeds
      */
     bool setParentByObject(std::uint32_t child_object_reference,
                            std::optional<std::uint32_t> parent_object_reference);
 
     /**
-     * @brief Removes a node by object reference
-     * @param object_reference Object id from memory pool
-     * @return True when removed
+     * @brief removes the node mapped to one object id
+     * @param object_reference object id
+     * @return true when a node was found and removed
      */
     bool removeNodeByObject(std::uint32_t object_reference);
 
     /**
-     * @brief Updates local transform by object reference
-     * @param object_reference Object id from memory pool
-     * @param local_transform New local transform
-     * @return True when updated
+     * @brief replaces the local transform for one object backed node
+     * @param object_reference object id
+     * @param local_transform new local transform
+     * @return true when the node exists
      */
     bool setLocalTransformByObject(std::uint32_t object_reference, const glm::mat4& local_transform);
 
     /**
-     * @brief Updates culling radius by object reference
-     * @param object_reference Object id from memory pool
-     * @param bounding_radius New radius used for culling and broad-phase overlap
-     * @return True when updated
+     * @brief changes the broad phase sphere radius for one object
+     * @param object_reference object id
+     * @param bounding_radius new sphere radius
+     * @return true when the node exists
      */
     bool setBoundingRadiusByObject(std::uint32_t object_reference, float bounding_radius);
 
     /**
-     * @brief Propagates parent-child transforms through hierarchy
+     * @brief recomputes world transforms for the whole tree
      */
     void updateWorldTransforms();
 
     /**
-     * @brief Rebuilds the BVH from active node world positions
+     * @brief rebuilds the entire bvh from active object nodes
      *
-     * The rebuild gathers all active object-backed nodes, computes simple bounds from their
-     * world positions plus bounding radii, then recursively partitions that list into a binary tree
-     * A full rebuild is simpler than incremental updates for this assignment-sized engine
+     * rebuild means
+     * collect all active object backed nodes
+     * compute one simple aabb from each nodes world position and radius
+     * recursively split the list into a binary tree
+     *
+     * for this assignment a full rebuild is simpler than trying to update the tree incrementally
      */
     void rebuildSpatialIndex();
 
     /**
-     * @brief Traverses visible spatial buckets and appends to render queue
-     * @param render_queue Output queue of visible object references
-     * @param camera_position Camera position in world space
-     * @param cull_radius Query radius around camera for simple culling
+     * @brief convenience wrapper that fills a render queue through radius culling
+     * @param render_queue output object ids
+     * @param camera_position camera center in world space
+     * @param cull_radius radius around the camera
      *
-     * This is a convenience wrapper over queryRadius used by the render path
-     * The important BVH idea is that most nodes are rejected before individual objects are tested
+     * this is just a render flavored name for the same bvh radius query
      */
     void render(std::vector<std::uint32_t>& render_queue,
                 const glm::vec3& camera_position,
                 float cull_radius) const;
 
     /**
-     * @brief Queries object references overlapping an XZ radius around center
-     * @param out_objects Output list cleared then filled with matching objects
-     * @param center Query center in world space
-     * @param radius Query radius in world units
+     * @brief finds object ids whose xz footprint overlaps a circle
+     * @param out_objects output list that gets cleared first
+     * @param center query center in world space
+     * @param radius query radius
      */
     void queryRadius(std::vector<std::uint32_t>& out_objects,
                      const glm::vec3& center,
                      float radius) const;
 
     /**
-     * @brief Queries object references overlapping an XZ axis-aligned box
-     * @param out_objects Output list cleared then filled with matching objects
-     * @param min_xz Inclusive world-space minimum for XZ
-     * @param max_xz Inclusive world-space maximum for XZ
+     * @brief finds object ids whose broad phase boxes overlap an xz aabb
+     * @param out_objects output list that gets cleared first
+     * @param min_xz minimum xz corner
+     * @param max_xz maximum xz corner
      */
     void queryAabb(std::vector<std::uint32_t>& out_objects,
                    const glm::vec2& min_xz,
                    const glm::vec2& max_xz) const;
 
     /**
-     * @brief Returns world transform for an object reference
-     * @param object_reference Object id from memory pool
-     * @return World transform matrix or identity
+     * @brief returns the current world transform for one object id
+     * @param object_reference object id
+     * @return world transform or identity if missing
      */
     glm::mat4 worldTransformForObject(std::uint32_t object_reference) const;
 
     /**
-     * @brief Returns active object count mapped into the scene graph
-     * @return Number of active object-backed nodes
+     * @brief returns how many active object backed nodes are tracked
+     * @return active object count
      */
     std::size_t activeObjectCount() const;
 
 private:
     /**
-     * @brief BVH node used for broad-phase traversal
+     * @brief one node in the flat stored bvh
      *
-     * A BVH node stores one bounding box over a region of space
-     * If it is a leaf, start/count identify which objects live in that region
-     * If it is internal, left_child/right_child identify two smaller regions inside it
+     * this is not a scene node
+     * this is just a spatial helper structure
+     *
+     * if is_leaf is true
+     * start and count describe a contiguous slice inside spatial_object_nodes_
+     *
+     * if is_leaf is false
+     * left_child and right_child point to two child bvh nodes in bvh_nodes_
      */
     struct BvhNode {
-        // bounds that contain either all objects in this leaf or both child nodes
+        // box that encloses either the leaf objects or both child subtrees
         glm::vec3 min_bounds;
         glm::vec3 max_bounds;
-        // child indices are only valid when is_leaf is false
+        // valid only for internal nodes
         std::uint32_t left_child;
         std::uint32_t right_child;
-        // start/count point into spatial_object_nodes_ for leaf storage
+        // valid only for leaf nodes
         std::size_t start;
         std::size_t count;
+        // tells whether this node stores direct objects or child pointers
         bool is_leaf;
     };
 
     /**
-     * @brief Recursive world transform update for one subtree
-     * @param node_id Node to update
-     * @param parent_world Parent world transform
+     * @brief recursive helper for world transform propagation
+     * @param node_id node to update
+     * @param parent_world already accumulated parent transform
      */
     void updateWorldRecursive(SceneNodeId node_id, const glm::mat4& parent_world);
 
     /**
-     * @brief Removes node recursively from hierarchy
-     * @param node_id Node to remove
+     * @brief recursively removes one node and its whole subtree
+     * @param node_id node to remove
      */
     void removeNodeRecursive(SceneNodeId node_id);
 
     /**
-     * @brief Returns true when a node id is in-range and active
-     * @param node_id Candidate node id
-     * @return Valid and active status
+     * @brief checks whether a node id currently refers to a live slot
+     * @param node_id candidate node id
+     * @return true when in range and active
      */
     bool isNodeActive(SceneNodeId node_id) const;
 
     /**
-     * @brief Returns true when ancestor is in parent chain of node
-     * @param ancestor Candidate ancestor node id
-     * @param node Node id to test
-     * @return True when ancestor is on the chain
+     * @brief checks whether one node appears in the parent chain of another
+     * @param ancestor possible ancestor
+     * @param node node being tested
+     * @return true when ancestor is on the path to the root
      */
     bool isAncestor(SceneNodeId ancestor, SceneNodeId node) const;
 
     /**
-     * @brief Extracts world position for one active node
-     * @param node_id Node to inspect
-     * @return Node world-space translation
+     * @brief extracts the world position from one nodes transform
+     * @param node_id node to inspect
+     * @return translation in world space
      */
     glm::vec3 worldPositionForNode(SceneNodeId node_id) const;
 
     /**
-     * @brief Computes a sphere-based AABB for one active node
-     * @param node_id Node to inspect
-     * @return Pair of minimum and maximum world-space bounds
+     * @brief turns one nodes sphere radius into a simple aabb
+     * @param node_id node to inspect
+     * @return min and max world bounds
      */
     std::pair<glm::vec3, glm::vec3> boundsForNode(SceneNodeId node_id) const;
 
     /**
-     * @brief Computes combined bounds for a BVH object range
-     * @param start Inclusive start index in spatial object array
-     * @param end Exclusive end index in spatial object array
-     * @return Pair of minimum and maximum world-space bounds
+     * @brief computes the full object bounds over one contiguous range
+     * @param start inclusive begin index in spatial_object_nodes_
+     * @param end exclusive end index in spatial_object_nodes_
+     * @return min and max world bounds
      *
-     * These are the true object bounds used to contain all geometry assigned to one BVH subtree
+     * this is the actual box stored on the bvh node
+     * it must contain every object assigned to that subtree
      */
     std::pair<glm::vec3, glm::vec3> computeRangeBounds(std::size_t start, std::size_t end) const;
 
     /**
-     * @brief Computes centroid bounds for a BVH object range
-     * @param start Inclusive start index in spatial object array
-     * @param end Exclusive end index in spatial object array
-     * @return Pair of minimum and maximum centroid bounds
+     * @brief computes bounds over object centers only for split decisions
+     * @param start inclusive begin index in spatial_object_nodes_
+     * @param end exclusive end index in spatial_object_nodes_
+     * @return min and max centroid bounds
      *
-     * Centroid bounds are used only for choosing a split axis
-     * This is different from computeRangeBounds, which measures actual object volume
+     * this is not the same as object volume bounds
+     * centroid bounds only help us decide which axis has the widest spread
      */
     std::pair<glm::vec3, glm::vec3> computeCentroidBounds(std::size_t start, std::size_t end) const;
 
     /**
-     * @brief Builds a BVH subtree over a contiguous spatial object range
-     * @param start Inclusive start index in spatial object array
-     * @param end Exclusive end index in spatial object array
-     * @return BVH node index for the subtree root
+     * @brief builds one bvh subtree over a contiguous object range
+     * @param start inclusive begin index in spatial_object_nodes_
+     * @param end exclusive end index in spatial_object_nodes_
+     * @return index of the new bvh node inside bvh_nodes_
      *
-     * The builder chooses a split axis from the widest centroid dimension
-     * then partitions the objects around the median so the subtree stays reasonably balanced
+     * the builder uses a median split on the widest centroid axis
+     * that keeps the tree fairly balanced without a complicated cost model
      */
     std::uint32_t buildBvhRecursive(std::size_t start, std::size_t end);
 
     /**
-     * @brief Traverses the BVH for a circular XZ query
-     * @param out_objects Output object references
-     * @param bvh_node_index Current BVH node index
-     * @param center Query center in world space
-     * @param radius Query radius in world units
+     * @brief recursive helper for circular xz bvh queries
+     * @param out_objects output object ids
+     * @param bvh_node_index current bvh node index
+     * @param center query center
+     * @param radius query radius
      *
-     * The traversal is prune-first
-     * A whole subtree is skipped when its node bounds cannot overlap the query region
+     * this is prune first traversal
+     * if the parent box misses the circle we skip the whole subtree immediately
      */
     void queryRadiusRecursive(std::vector<std::uint32_t>& out_objects,
                               std::uint32_t bvh_node_index,
@@ -297,28 +325,31 @@ private:
                               float radius) const;
 
     /**
-     * @brief Traverses the BVH for an XZ AABB query
-     * @param out_objects Output object references
-     * @param bvh_node_index Current BVH node index
-     * @param min_xz Inclusive minimum XZ corner
-     * @param max_xz Inclusive maximum XZ corner
+     * @brief recursive helper for xz box queries
+     * @param out_objects output object ids
+     * @param bvh_node_index current bvh node index
+     * @param min_xz minimum xz corner
+     * @param max_xz maximum xz corner
      *
-     * This is the same traversal strategy as the radius query but with box overlap tests
-     * Broad-phase rejection happens on parent boxes before leaf objects are checked
+     * same broad phase idea as the radius query
+     * parent miss means whole subtree miss
      */
     void queryAabbRecursive(std::vector<std::uint32_t>& out_objects,
                             std::uint32_t bvh_node_index,
                             const glm::vec2& min_xz,
                             const glm::vec2& max_xz) const;
 
-    // upper bound on how many objects stay in one BVH leaf before splitting
+    // maximum number of objects allowed in one leaf before recursion tries to split
     std::size_t max_leaf_objects_;
+    // dense storage for every scene node including inactive recycled slots
     std::vector<SceneNode> nodes_;
+    // free list of recycled node ids so node storage does not grow forever
     std::vector<SceneNodeId> free_node_ids_;
+    // map from game object id to scene node id for fast lookups from gameplay code
     std::unordered_map<std::uint32_t, SceneNodeId> object_to_node_;
-    // compact array of active object-backed scene nodes used during BVH build
+    // flat array of active object backed scene node ids used during bvh construction
     std::vector<SceneNodeId> spatial_object_nodes_;
-    // flat BVH storage so traversal can recurse by node index
+    // flat bvh storage where child links are just indices into this vector
     std::vector<BvhNode> bvh_nodes_;
 };
 

@@ -1,6 +1,6 @@
 /**
  * @file Sound.h
- * @brief RAII sound object for mono WAV sample data
+ * @brief simple owned sound buffer for wav data after conversion
  */
 #ifndef SOUND_H
 #define SOUND_H
@@ -10,17 +10,21 @@
 #include <SDL.h>
 
 /**
- * @brief Owns converted mono sound bytes for playback
+ * @brief stores one converted sound buffer that the mixer can read from later
+ *
+ * this class is intentionally tiny
+ * it just owns bytes and knows how long the byte buffer is
+ * the audio system can then borrow that buffer without worrying about manual frees
  */
 class Sound {
 public:
     /**
-     * @brief Constructs an empty sound object
+     * @brief makes an empty sound with no loaded bytes
      */
     Sound();
 
     /**
-     * @brief Releases owned sound memory
+     * @brief frees the owned sound buffer if one is loaded
      */
     ~Sound();
 
@@ -30,32 +34,37 @@ public:
     Sound& operator=(Sound&& other) noexcept;
 
     /**
-     * @brief Loads and converts WAV into signed 8-bit mono data
-     * @param path WAV file path
-     * @param target_frequency Target playback frequency
-     * @return True on success
+     * @brief loads a wav file and converts it into mono signed 16 bit samples
+     * @param path wav file path on disk
+     * @param target_frequency playback frequency the audio device wants
+     * @return true when load and conversion both work
+     *
+     * the rest of the engine expects one simple mono buffer
+     * later the sound system duplicates each mono sample into left and right channels
      */
-    bool loadWavMonoS8(const std::string& path, int target_frequency);
+    bool loadWavMonoS16(const std::string& path, int target_frequency);
 
     /**
-     * @brief Returns pointer to converted audio bytes
-     * @return Audio data pointer or nullptr
+     * @brief returns the first byte of the converted buffer
+     * @return data pointer or nullptr when nothing is loaded
      */
     const Uint8* data() const;
 
     /**
-     * @brief Returns number of bytes in converted audio data
-     * @return Byte length
+     * @brief returns how many bytes exist in the converted buffer
+     * @return byte count
      */
     Uint32 length() const;
 
     /**
-     * @brief Clears loaded sound data
+     * @brief drops the current sound buffer and resets back to empty
      */
     void clear();
 
 private:
+    // raw owned bytes returned by sdl allocation helpers
     Uint8* data_;
+    // total number of valid bytes inside data_
     Uint32 length_;
 };
 
