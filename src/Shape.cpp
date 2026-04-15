@@ -1,7 +1,9 @@
 #include "Shape.h"
 
 #include <algorithm>
+#include <limits>
 #include <numeric>
+#include <utility>
 
 /**
  * @brief builds cpu side arrays and gpu side opengl state for one mesh
@@ -15,13 +17,18 @@
  * this is why the offset math below advances by whole attribute blocks instead of per vertex strides
  */
 Shape::Shape(std::size_t triangleCount, const MeshAttributeLayout& layout,
-             const std::vector<float>& vertexData)
+             const std::vector<float>& vertexData,
+             std::shared_ptr<const SkeletalRig> skeletal_rig)
     : pos_(),
       norm_(),
       vao_(0),
       vbo_(0),
       triangle_count_(triangleCount),
-      attribute_components_(layout.attribute_components) {
+      attribute_components_(layout.attribute_components),
+      skeletal_rig_(std::move(skeletal_rig)),
+      local_bounds_min_(0.0f),
+      local_bounds_max_(0.0f),
+      has_local_bounds_(false) {
     // triangle meshes always have 3 vertices per primitive
     const std::size_t vertex_count = triangleCount * 3;
     if (attribute_components_.empty()) {
@@ -45,6 +52,17 @@ Shape::Shape(std::size_t triangleCount, const MeshAttributeLayout& layout,
         for (std::size_t i = 0; i + 2 < usable_floats && pos_.size() < vertex_count; i += stride) {
             pos_.emplace_back(vertexData[i], vertexData[i + 1], vertexData[i + 2]);
         }
+    }
+    if (!pos_.empty()) {
+        glm::vec3 min_bounds(std::numeric_limits<float>::max());
+        glm::vec3 max_bounds(std::numeric_limits<float>::lowest());
+        for (const glm::vec3& position : pos_) {
+            min_bounds = glm::min(min_bounds, position);
+            max_bounds = glm::max(max_bounds, position);
+        }
+        local_bounds_min_ = min_bounds;
+        local_bounds_max_ = max_bounds;
+        has_local_bounds_ = true;
     }
     // cache normals on the cpu too if a second attribute block exists
     // normals begin after every position float for every vertex
@@ -140,4 +158,25 @@ bool Shape::hasAttribute(std::size_t attributeIndex) const {
     }
     // a zero component attribute is treated as missing
     return attribute_components_[attributeIndex] > 0;
+}
+
+bool Shape::hasSkinningData() const {
+    return skeletal_rig_ && skeletal_rig_->boneCount() > 0 &&
+           hasAttribute(3) && hasAttribute(4);
+}
+
+bool Shape::hasLocalBounds() const {
+    return has_local_bounds_;
+}
+
+glm::vec3 Shape::localBoundsMin() const {
+    return local_bounds_min_;
+}
+
+glm::vec3 Shape::localBoundsMax() const {
+    return local_bounds_max_;
+}
+
+std::shared_ptr<const SkeletalRig> Shape::skeletalRig() const {
+    return skeletal_rig_;
 }

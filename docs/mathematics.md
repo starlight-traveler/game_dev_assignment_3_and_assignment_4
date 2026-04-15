@@ -3,260 +3,193 @@ layout: default
 title: Mathematics
 ---
 
-# Basic Mathematics In The Current Engine
+# Assignment 3 Mathematics
 
-This page focuses on the core mathematics already present in the codebase
+This page collects the main formulas and data reductions used by the implemented Assignment 3 systems.
 
-## 1. Foundational Math Ideas
+## 1. Linear Integration
 
-Before looking at the engine-specific formulas, there are a few basic mathematical ideas that appear throughout the code
-
-### Coordinate Space
-
-The engine is working in 3D world space, so almost every important value is measured against three axes
-
-- `x`
-  usually left and right
-- `y`
-  usually up and down
-- `z`
-  usually forward and backward
-
-That means a point like `(4, 2, -1)` means
-
-- 4 units along the X axis
-- 2 units along the Y axis
-- -1 units along the Z axis
-
-When the engine stores an object position, it is really storing where that object sits in this 3D coordinate system
-
-### Scalars Versus Vectors
-
-A scalar is a single number such as
-
-- time
-- speed
-- angle
-- radius
-
-A vector is a collection of components that describe direction and magnitude together
-
-Examples from the engine
-
-- `float delta_seconds`
-- `float bounding_radius`
-- `glm::vec3 position_`
-- `glm::vec3 linear_velocity_`
-
-This distinction matters because scalar multiplication changes the size of a vector without changing its direction
-
-For example
+The helper in `src/Integration.h` uses the usual discrete Euler step:
 
 $$
-2 \cdot (1, 0, 0) = (2, 0, 0)
+\Delta s = v \Delta t
 $$
 
-### Vectors
-
-Most of the code uses `glm::vec3` for 3D quantities such as
-
-- position
-- velocity
-- direction
-- light position
-- normals
-
-For example, the engine stores object position and velocity like this
-
-```cpp
-glm::vec3 position_;
-glm::vec3 linear_velocity_;
-glm::vec3 angular_velocity_;
-```
-
-Source: `src/GameObject.h`
-
-Conceptually, a 3D vector is just an ordered triple
+That same helper is reused for acceleration integration by treating acceleration as a rate of change of velocity:
 
 $$
-\mathbf{v} = (x, y, z)
+\Delta v = a \Delta t
 $$
 
-You can think of a vector in two common ways
+In code, that means:
 
-- as a position relative to the origin
-- as a direction and distance
+- position update: `position += velocity * dt`
+- velocity update: `velocity += acceleration * dt`
 
-That second interpretation is especially important in the engine
+## 2. Angular Integration
 
-- velocity is a direction plus speed
-- camera forward is a direction
-- light direction is a direction
-- parent-to-child offsets are directions plus distances
+Angular velocity is stored as a 3-vector whose direction is the axis of rotation and whose magnitude is angular speed in radians per second.
 
-### Vector Addition And Subtraction
-
-Vectors are added component by component
+The runtime turns that into one frame-sized quaternion:
 
 $$
-(x_1, y_1, z_1) + (x_2, y_2, z_2) = (x_1 + x_2, y_1 + y_2, z_1 + z_2)
+\theta = \|\omega\| \Delta t
 $$
 
-They are subtracted the same way
-
 $$
-(x_1, y_1, z_1) - (x_2, y_2, z_2) = (x_1 - x_2, y_1 - y_2, z_1 - z_2)
+\hat{u} = \frac{\omega}{\|\omega\|}
 $$
 
-This appears constantly in gameplay and rendering math
-
-- `target - position` gives the direction from one point to another
-- `position + velocity * dt` advances an object through space
-- `light_pos - frag_pos` gives the direction from a surface point to the light
-
-### Vector Length
-
-The engine repeatedly uses vector magnitude, especially for angular velocity and distance tests
-
-```cpp
-const float speed = glm::length(angular_velocity_);
-```
-
-Source: `src/GameObject.cpp:31`
-
-Mathematically
-
 $$
-\|\mathbf{v}\| = \sqrt{x^2 + y^2 + z^2}
+q_{\Delta} = \left(\cos\left(\frac{\theta}{2}\right), \hat{u}\sin\left(\frac{\theta}{2}\right)\right)
 $$
 
-If a vector is `(3, 4, 0)`, then its length is
+The current orientation is then updated by quaternion multiplication rather than by storing Euler angles.
+
+## 3. Impulses
+
+The current engine models impulses in the simple assignment-friendly form of direct velocity changes:
 
 $$
-\sqrt{3^2 + 4^2 + 0^2} = 5
+v' = v + J
 $$
 
-That is why vector length is a geometric distance measure
-
-### Squared Length And Squared Distance
-
-The engine often avoids an actual square root when it only needs a comparison
-
-For example, instead of checking whether
-
 $$
-\|\mathbf{d}\| \le r
+\omega' = \omega + J_{\omega}
 $$
 
-it can check
+There is no mass or inertia tensor in this branch. The impulse API is intentionally kinematic and event-driven.
+
+## 4. AABB Refresh From Rotated Local Bounds
+
+Each `GameObject` stores the eight corners of its local bounds template. After a position or rotation change:
+
+1. rotate each local corner by the current quaternion
+2. compute component-wise min and max over the rotated set
+3. add the world position
+
+In compact form:
 
 $$
-\mathbf{d} \cdot \mathbf{d} \le r^2
+p_i' = R(q) p_i + t
 $$
 
-This is cheaper and appears in the BVH query path because broad-phase tests may run many times per frame
-
-### Normalization
-
-A normalized vector has length 1 and preserves only direction
-
-```cpp
-return glm::normalize(fwd);
-```
-
-Source: `src/main.cpp:240`
-
-Mathematically
-
 $$
-\hat{v} = \frac{\mathbf{v}}{\|\mathbf{v}\|}
+\text{aabb}_{min} = \min_i(p_i')
 $$
 
-This appears all over the engine because direction calculations are usually cleaner and more stable with unit vectors
-
-For example, `(3, 4, 0)` normalizes to
-
 $$
-\left(\frac{3}{5}, \frac{4}{5}, 0\right)
+\text{aabb}_{max} = \max_i(p_i')
 $$
 
-That vector points in the same direction, but now its length is 1
+That is how the engine keeps world-space AABBs aligned to the global axes even when the object itself rotates.
 
-This matters because many formulas expect pure direction without extra scale mixed in
+## 5. Broad-Phase AABB Overlap
 
-### Unit Directions
-
-A unit vector is just another name for a normalized vector
-
-The engine depends on unit directions in several places
-
-- camera forward vectors
-- camera right and up vectors
-- quaternion axis construction
-- shader normal vectors
-- shader light directions
-
-If these were not unit length, then formulas like dot products or axis-angle construction would produce misleading results
-
-### Dot Product
-
-The dot product appears in the BVH query tests, the shader lighting, and movement checks
-
-```cpp
-if (glm::dot(delta_xz, delta_xz) <= (max_distance * max_distance)) {
-```
-
-Source: `src/SceneGraph.cpp:566`
-
-Mathematically
+The exact overlap test used after BVH candidate generation is the Assignment 3 AABB test:
 
 $$
-\mathbf{a} \cdot \mathbf{b} = a_x b_x + a_y b_y + a_z b_z
+A_{min}.x \le B_{max}.x
 $$
 
-Important interpretations
-
-- `dot(v, v)` gives squared length
-- `dot(n, l)` measures how aligned two directions are
-
-There is another very important interpretation when both vectors are normalized
-
 $$
-\mathbf{a} \cdot \mathbf{b} = \cos(\theta)
+A_{min}.y \le B_{max}.y
 $$
 
-That means
+$$
+A_{min}.z \le B_{max}.z
+$$
 
-- close to `1`
-  the vectors point in nearly the same direction
-- close to `0`
-  the vectors are perpendicular
-- close to `-1`
-  the vectors point in opposite directions
+$$
+A_{max}.x \ge B_{min}.x
+$$
 
-That is why Lambert lighting uses `dot(n, l)`: it measures how directly the light hits the surface
+$$
+A_{max}.y \ge B_{min}.y
+$$
 
-### Cross Product
+$$
+A_{max}.z \ge B_{min}.z
+$$
 
-The cross product is used to build camera basis vectors
+All six comparisons must hold.
 
-```cpp
-glm::vec3 right = glm::cross(fwd, world_up);
-```
+## 6. BVH Broad-Phase Approximation
 
-Source: `src/main.cpp:234`
+The collision broad phase converts each world AABB into a center and scalar radius before synchronizing into the `SceneGraph`:
 
-Mathematically, the cross product returns a vector perpendicular to both inputs
+$$
+c = \frac{min + max}{2}
+$$
 
-This is why it is useful for constructing camera right and up directions
+$$
+r = \frac{\|max - min\|}{2}
+$$
 
-Its direction follows the right-hand rule, which matters in a right-handed 3D engine
+This is not the final collision decision. It is only the bound used by the BVH to prune candidate pairs before the exact AABB test runs.
 
-If `forward` and `up` are known, then the cross product gives the sideways axis needed to complete an orthogonal basis
+## 7. Triangular Collision Table Indexing
 
-### Matrices
+The collision callback table stores one entry per unordered type pair instead of a full duplicated matrix.
 
-The engine uses `glm::mat4` for transforms
+For:
+
+$$
+low = \min(a, b), \quad high = \max(a, b)
+$$
+
+the stored index is:
+
+$$
+index = \frac{high(high + 1)}{2} + low
+$$
+
+That reduces storage from a full `N x N` matrix to the lower triangle while still supporting same-type diagonal entries.
+
+## 8. SLERP For Animation Playback
+
+The animation controller samples between two keyframes with quaternion SLERP rather than component-wise linear interpolation.
+
+Conceptually:
+
+$$
+q(t) = \text{slerp}(q_A, q_B, \alpha)
+$$
+
+where:
+
+$$
+\alpha = \frac{t - t_A}{t_B - t_A}
+$$
+
+This preserves rotational interpolation on the unit quaternion sphere and avoids the worst artifacts of naive lerp plus renormalization.
+
+## 9. Forward Kinematics
+
+For each bone, the runtime carries forward parent rotation and parent displacement through the hierarchy.
+
+In simplified form:
+
+$$
+q_{world,i} = q_{world,parent(i)} q_{local,i}
+$$
+
+$$
+d_i = d_{parent(i)} + q_{world,i} \cdot offset_i
+$$
+
+Those results are then assembled into one matrix per bone for the vertex shader.
+
+## 10. Why These Pieces Fit Together
+
+Assignment 3 is mostly about feeding later stages with coherent state:
+
+- integration updates transforms
+- transform changes update AABBs
+- AABBs feed the BVH-backed broad phase
+- broad phase reduces candidate pairs
+- exact overlap tests decide whether to dispatch callbacks
+- animation math updates the skin matrices that rendering consumes that same frame
 
 These matrices represent
 

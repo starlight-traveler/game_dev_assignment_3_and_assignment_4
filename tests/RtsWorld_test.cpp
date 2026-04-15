@@ -568,6 +568,77 @@ bool test_rts_world_formation_order_api() {
            (max_z - min_z) >= 1.0f;
 }
 
+bool test_rts_world_formation_order_can_focus_building() {
+    RtsWorld world(18, 18, 1.0f);
+    if (!world.registerUnitArchetype("soldier", RtsUnitArchetype{
+            2.5f, 0.35f, 4.0f, 1.5f, 2.2f, 90.0f, 22.0f, 0.55f, 9.0f
+        }) ||
+        !world.registerBuildingArchetype("outpost", RtsBuildingArchetype{
+            BuildingDefinition{2, 2, true, true},
+            true,
+            false,
+            0.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            {},
+            {},
+            0,
+            false,
+            110.0f,
+            0.0f,
+            0.0f
+        })) {
+        return false;
+    }
+
+    const std::vector<std::uint32_t> unit_ids{320, 321};
+    if (!world.addUnitFromArchetype(320, 0, glm::vec3(2.5f, 0.0f, 2.5f), "soldier") ||
+        !world.addUnitFromArchetype(321, 0, glm::vec3(3.4f, 0.0f, 2.5f), "soldier")) {
+        return false;
+    }
+
+    const std::optional<std::uint32_t> building_id =
+        world.placeBuildingFromArchetype(1, "outpost", GridCoord{11, 10});
+    const auto building_snapshot = building_id.has_value()
+                                       ? world.getBuildingSnapshot(building_id.value())
+                                       : std::nullopt;
+    if (!building_id.has_value() || !building_snapshot.has_value()) {
+        return false;
+    }
+
+    if (!world.issueFormationOrder(unit_ids,
+                                   building_snapshot->center,
+                                   RtsOrderType::attack_move,
+                                   1.2f,
+                                   false,
+                                   0,
+                                   building_id.value())) {
+        return false;
+    }
+
+    bool saw_building_damage = false;
+    for (int step = 0; step < 120; ++step) {
+        world.update(0.1f);
+        saw_building_damage |= has_event_type(world.events(), RtsEventType::building_damaged);
+        if (!world.getBuildingSnapshot(building_id.value()).has_value()) {
+            break;
+        }
+    }
+
+    if (world.getBuildingSnapshot(building_id.value()).has_value()) {
+        return false;
+    }
+
+    glm::vec3 centroid(0.0f);
+    for (const std::uint32_t unit_id : unit_ids) {
+        centroid += world.getUnitPosition(unit_id);
+    }
+    centroid /= static_cast<float>(unit_ids.size());
+    return saw_building_damage &&
+           planar_distance(centroid, building_snapshot->center) <= 1.4f;
+}
+
 bool test_rts_world_combat_event_output() {
     RtsWorld world(12, 12, 1.0f);
     if (!world.registerUnitArchetype("skirmisher", RtsUnitArchetype{
@@ -1452,6 +1523,11 @@ int main() {
 
     if (!test_rts_world_formation_order_api()) {
         std::cerr << "RtsWorld test failure: formation order API\n";
+        ++failures;
+    }
+
+    if (!test_rts_world_formation_order_can_focus_building()) {
+        std::cerr << "RtsWorld test failure: formation order building focus\n";
         ++failures;
     }
 

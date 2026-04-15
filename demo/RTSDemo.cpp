@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <exception>
@@ -74,6 +75,11 @@ const char* kUnitArchetypeEnemyWorker = "enemy_worker";
 const char* kBuildingFarm = "farm";
 const char* kBuildingDepot = "depot";
 const char* kBuildingTower = "tower";
+constexpr GridCoord kPlayerDepotAnchor{8, 9};
+constexpr GridCoord kPlayerFarmAnchor{3, 14};
+constexpr GridCoord kEnemyDepotAnchor{16, 10};
+constexpr GridCoord kEnemyTowerAnchor{13, 9};
+constexpr GridCoord kEnemyFarmAnchor{18, 3};
 
 // camera is intentionally simple in this demo
 // it never rotates
@@ -164,6 +170,102 @@ std::string find_first_existing_path(const std::vector<std::string>& candidates)
     return {};
 }
 
+float fract01(float value) {
+    return value - std::floor(value);
+}
+
+float smooth01(float value) {
+    const float clamped = std::clamp(value, 0.0f, 1.0f);
+    return clamped * clamped * (3.0f - 2.0f * clamped);
+}
+
+float lerp_scalar(float a, float b, float t) {
+    return a + (b - a) * t;
+}
+
+float hash_noise(int x, int y) {
+    const float value =
+        std::sin(static_cast<float>(x) * 127.1f + static_cast<float>(y) * 311.7f) * 43758.5453f;
+    return fract01(value);
+}
+
+float value_noise(float x, float y) {
+    const int ix = static_cast<int>(std::floor(x));
+    const int iy = static_cast<int>(std::floor(y));
+    const float tx = smooth01(x - static_cast<float>(ix));
+    const float ty = smooth01(y - static_cast<float>(iy));
+
+    const float v00 = hash_noise(ix, iy);
+    const float v10 = hash_noise(ix + 1, iy);
+    const float v01 = hash_noise(ix, iy + 1);
+    const float v11 = hash_noise(ix + 1, iy + 1);
+
+    const float top = lerp_scalar(v00, v10, tx);
+    const float bottom = lerp_scalar(v01, v11, tx);
+    return lerp_scalar(top, bottom, ty);
+}
+
+float fbm_noise(float x, float y, int octaves = 4) {
+    float value = 0.0f;
+    float amplitude = 0.5f;
+    float frequency = 1.0f;
+    float amplitude_sum = 0.0f;
+    for (int octave = 0; octave < octaves; ++octave) {
+        value += value_noise(x * frequency, y * frequency) * amplitude;
+        amplitude_sum += amplitude;
+        amplitude *= 0.5f;
+        frequency *= 2.0f;
+    }
+    return amplitude_sum > 0.0f ? value / amplitude_sum : 0.0f;
+}
+
+float cell_noise(int x, int y) {
+    return hash_noise(x * 17 + 3, y * 29 + 11);
+}
+
+std::string to_upper_ascii(std::string text) {
+    for (char& character : text) {
+        character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+    }
+    return text;
+}
+
+std::string humanize_identifier(const std::string& identifier) {
+    std::string humanized{};
+    humanized.reserve(identifier.size());
+    for (char character : identifier) {
+        humanized.push_back(character == '_' ? ' ' : character);
+    }
+    return to_upper_ascii(humanized);
+}
+
+std::string readable_unit_label(const std::string& archetype_id) {
+    if (archetype_id == kUnitArchetypePlayer || archetype_id == kUnitArchetypeEnemy) {
+        return "INFANTRY";
+    }
+    if (archetype_id == kUnitArchetypeWorker || archetype_id == kUnitArchetypeEnemyWorker) {
+        return "WORKER";
+    }
+    return humanize_identifier(archetype_id);
+}
+
+std::string readable_building_label(const std::string& archetype_id) {
+    if (archetype_id == kBuildingFarm) {
+        return "FARM";
+    }
+    if (archetype_id == kBuildingDepot) {
+        return "DEPOT";
+    }
+    if (archetype_id == kBuildingTower) {
+        return "TOWER";
+    }
+    return humanize_identifier(archetype_id);
+}
+
+glm::vec3 build_isometric_eye(const CameraState& camera) {
+    return camera.focus + glm::vec3(kCameraDistance, kCameraHeight, kCameraDistance);
+}
+
 glm::mat4 build_isometric_projection(SDL_Window* window, float zoom) {
     int width = 1;
     int height = 1;
@@ -184,7 +286,7 @@ glm::mat4 build_isometric_projection(SDL_Window* window, float zoom) {
 glm::mat4 build_isometric_view(const CameraState& camera) {
     // the camera sits on a fixed diagonal so the scene reads as an isometric board
     // focus is the point that pans across the terrain
-    const glm::vec3 eye = camera.focus + glm::vec3(kCameraDistance, kCameraHeight, kCameraDistance);
+    const glm::vec3 eye = build_isometric_eye(camera);
     return glm::lookAt(eye, camera.focus, glm::vec3(0.0f, 1.0f, 0.0f));
 }
 
@@ -360,16 +462,16 @@ glm::vec3 terrain_color(const TerrainCell& cell) {
     // the demo wants fast recognition of roads forests water and rock at a glance
     switch (cell.type) {
     case TerrainType::grass:
-        return glm::vec3(0.18f, 0.30f, 0.18f);
+        return glm::vec3(0.22f, 0.36f, 0.24f);
     case TerrainType::road:
-        return glm::vec3(0.48f, 0.41f, 0.29f);
+        return glm::vec3(0.54f, 0.44f, 0.30f);
     case TerrainType::forest:
-        return glm::vec3(0.10f, 0.23f, 0.12f);
+        return glm::vec3(0.11f, 0.26f, 0.14f);
     case TerrainType::water:
-        return glm::vec3(0.14f, 0.33f, 0.60f);
+        return glm::vec3(0.12f, 0.34f, 0.58f);
     case TerrainType::rock:
     default:
-        return glm::vec3(0.33f, 0.35f, 0.37f);
+        return glm::vec3(0.39f, 0.40f, 0.42f);
     }
 }
 
@@ -377,16 +479,16 @@ float terrain_tile_height(const TerrainCell& cell) {
     // slight height differences help visually separate terrain categories even with very simple geometry
     switch (cell.type) {
     case TerrainType::road:
-        return 0.03f;
+        return 0.025f;
     case TerrainType::forest:
-        return 0.09f;
+        return 0.08f;
     case TerrainType::water:
-        return 0.04f;
+        return 0.03f;
     case TerrainType::rock:
-        return 0.11f;
+        return 0.14f;
     case TerrainType::grass:
     default:
-        return 0.05f;
+        return 0.055f;
     }
 }
 
@@ -558,6 +660,24 @@ std::vector<std::uint32_t> selected_unit_ids(
     return ids;
 }
 
+std::vector<std::uint32_t> selected_builder_ids(
+    const RtsWorld& world,
+    const std::unordered_map<std::uint32_t, UnitVisualState>& visuals,
+    const std::unordered_map<std::uint32_t, RtsWorldUnitSnapshot>& snapshots) {
+    std::vector<std::uint32_t> ids{};
+    for (const std::uint32_t unit_id : selected_unit_ids(visuals, snapshots)) {
+        const auto snapshot_it = snapshots.find(unit_id);
+        if (snapshot_it == snapshots.end()) {
+            continue;
+        }
+        const RtsUnitArchetype* archetype = world.findUnitArchetype(snapshot_it->second.archetype_id);
+        if (archetype && archetype->can_harvest) {
+            ids.push_back(unit_id);
+        }
+    }
+    return ids;
+}
+
 void sync_units_to_scene_graph(SceneGraph& scene_graph,
                                const std::vector<RtsWorldUnitSnapshot>& snapshots,
                                std::unordered_map<std::uint32_t, UnitVisualState>& visuals) {
@@ -692,6 +812,21 @@ const RtsWorldUnitSnapshot* find_enemy_unit_at_hit(
     return nearest;
 }
 
+std::optional<std::uint32_t> building_id_at_hit(const TerrainGrid& terrain,
+                                                const BuildingSystem& buildings,
+                                                const glm::vec3& world_hit) {
+    GridCoord hovered_cell{};
+    if (!terrain.worldToCell(world_hit, hovered_cell)) {
+        return std::nullopt;
+    }
+
+    const std::uint32_t building_id = buildings.buildingIdAtCell(hovered_cell);
+    if (building_id == 0) {
+        return std::nullopt;
+    }
+    return building_id;
+}
+
 std::optional<std::uint32_t> hovered_building_id(SDL_Window* window,
                                                  const CameraState& camera,
                                                  const TerrainGrid& terrain,
@@ -708,18 +843,8 @@ std::optional<std::uint32_t> hovered_building_id(SDL_Window* window,
     if (!intersect_ground_from_cursor(window, view, projection, mouse_x, mouse_y, hit_point)) {
         return std::nullopt;
     }
-
-    GridCoord hovered_cell{};
-    if (!terrain.worldToCell(hit_point, hovered_cell)) {
-        return std::nullopt;
-    }
-
-    const std::uint32_t building_id = buildings.buildingIdAtCell(hovered_cell);
-    if (building_id == 0) {
-        return std::nullopt;
-    }
     // the hovered building id drives production shortcuts and hover tinting in the renderer
-    return building_id;
+    return building_id_at_hit(terrain, buildings, hit_point);
 }
 
 const RtsWorldResourceNodeSnapshot* find_resource_node_at_hit(
@@ -762,6 +887,138 @@ void draw_screen_rect(SDL_Window* window,
     glDisable(GL_SCISSOR_TEST);
 }
 
+void draw_panel(SDL_Window* window,
+                int x,
+                int y,
+                int w,
+                int h,
+                const glm::vec3& fill_color,
+                const glm::vec3& accent_color) {
+    if (!window || w <= 0 || h <= 0) {
+        return;
+    }
+    draw_screen_rect(window, x, y, w, h, fill_color);
+    draw_screen_rect(window, x, y, w, 4, accent_color);
+    draw_screen_rect(window, x, y, 2, h, accent_color * 0.7f);
+    draw_screen_rect(window, x + w - 2, y, 2, h, accent_color * 0.7f);
+    draw_screen_rect(window, x, y + h - 2, w, 2, accent_color * 0.55f);
+}
+
+using GlyphRows = std::array<std::uint8_t, 7>;
+
+GlyphRows glyph_rows_for(char character) {
+    switch (std::toupper(static_cast<unsigned char>(character))) {
+    case 'A': return GlyphRows{0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001};
+    case 'B': return GlyphRows{0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110};
+    case 'C': return GlyphRows{0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110};
+    case 'D': return GlyphRows{0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110};
+    case 'E': return GlyphRows{0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111};
+    case 'F': return GlyphRows{0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000};
+    case 'G': return GlyphRows{0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110};
+    case 'H': return GlyphRows{0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001};
+    case 'I': return GlyphRows{0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111};
+    case 'J': return GlyphRows{0b00001, 0b00001, 0b00001, 0b00001, 0b10001, 0b10001, 0b01110};
+    case 'K': return GlyphRows{0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001};
+    case 'L': return GlyphRows{0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111};
+    case 'M': return GlyphRows{0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001};
+    case 'N': return GlyphRows{0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001};
+    case 'O': return GlyphRows{0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110};
+    case 'P': return GlyphRows{0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000};
+    case 'Q': return GlyphRows{0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101};
+    case 'R': return GlyphRows{0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001};
+    case 'S': return GlyphRows{0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110};
+    case 'T': return GlyphRows{0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100};
+    case 'U': return GlyphRows{0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110};
+    case 'V': return GlyphRows{0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100};
+    case 'W': return GlyphRows{0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010};
+    case 'X': return GlyphRows{0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001};
+    case 'Y': return GlyphRows{0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100};
+    case 'Z': return GlyphRows{0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111};
+    case '0': return GlyphRows{0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110};
+    case '1': return GlyphRows{0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110};
+    case '2': return GlyphRows{0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111};
+    case '3': return GlyphRows{0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110};
+    case '4': return GlyphRows{0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010};
+    case '5': return GlyphRows{0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110};
+    case '6': return GlyphRows{0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110};
+    case '7': return GlyphRows{0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000};
+    case '8': return GlyphRows{0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110};
+    case '9': return GlyphRows{0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110};
+    case ':': return GlyphRows{0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000};
+    case '/': return GlyphRows{0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b00000, 0b00000};
+    case '-': return GlyphRows{0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000};
+    case '.': return GlyphRows{0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00110, 0b00110};
+    case '!': return GlyphRows{0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100};
+    case ' ': return GlyphRows{0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000};
+    default: return GlyphRows{0b11111, 0b10001, 0b00110, 0b00110, 0b00110, 0b10001, 0b11111};
+    }
+}
+
+int pixel_text_width(const std::string& text, int scale) {
+    if (text.empty()) {
+        return 0;
+    }
+    return static_cast<int>(text.size()) * (5 * scale + scale) - scale;
+}
+
+void draw_pixel_text(SDL_Window* window,
+                     int x,
+                     int y,
+                     const std::string& text,
+                     int scale,
+                     const glm::vec3& color,
+                     bool draw_shadow = true) {
+    if (!window || scale <= 0 || text.empty()) {
+        return;
+    }
+
+    const std::string uppercase = to_upper_ascii(text);
+    if (draw_shadow) {
+        draw_pixel_text(window, x + scale, y + scale, uppercase, scale, glm::vec3(0.02f, 0.03f, 0.04f), false);
+    }
+
+    int cursor_x = x;
+    for (char character : uppercase) {
+        const GlyphRows rows = glyph_rows_for(character);
+        for (int row = 0; row < 7; ++row) {
+            int run_start = -1;
+            for (int column = 0; column <= 5; ++column) {
+                const bool filled =
+                    column < 5 && (rows[static_cast<std::size_t>(row)] & (1u << (4 - column))) != 0;
+                if (filled && run_start < 0) {
+                    run_start = column;
+                }
+                if ((!filled || column == 5) && run_start >= 0) {
+                    draw_screen_rect(window,
+                                     cursor_x + run_start * scale,
+                                     y + row * scale,
+                                     (column - run_start) * scale,
+                                     scale,
+                                     color);
+                    run_start = -1;
+                }
+            }
+        }
+        cursor_x += 5 * scale + scale;
+    }
+}
+
+void draw_pixel_text_right(SDL_Window* window,
+                           int right_x,
+                           int y,
+                           const std::string& text,
+                           int scale,
+                           const glm::vec3& color,
+                           bool draw_shadow = true) {
+    draw_pixel_text(window,
+                    right_x - pixel_text_width(text, scale),
+                    y,
+                    text,
+                    scale,
+                    color,
+                    draw_shadow);
+}
+
 void update_hud_pulses(HudPulseState& hud_pulses, const std::vector<RtsEvent>& events, float dt_seconds) {
     // the hud watches world events after simulation each frame
     // timers are reloaded whenever a matching event type appears
@@ -798,49 +1055,148 @@ void update_hud_pulses(HudPulseState& hud_pulses, const std::vector<RtsEvent>& e
     }
 }
 
+void flatten_rect_zone(TerrainGrid& terrain,
+                       const GridCoord& anchor,
+                       int width,
+                       int height,
+                       int padding,
+                       TerrainType type,
+                       float elevation_target) {
+    for (int y = anchor.y - padding; y < anchor.y + height + padding; ++y) {
+        for (int x = anchor.x - padding; x < anchor.x + width + padding; ++x) {
+            const GridCoord cell{x, y};
+            if (!terrain.isValidCell(cell)) {
+                continue;
+            }
+            terrain.setTerrainType(cell, type);
+            const float blended =
+                lerp_scalar(terrain.elevation(cell), elevation_target, padding > 0 ? 0.75f : 1.0f);
+            terrain.setElevation(cell, blended);
+        }
+    }
+}
+
+void flatten_circle_zone(TerrainGrid& terrain,
+                         const GridCoord& center,
+                         int radius,
+                         TerrainType type,
+                         float elevation_target) {
+    for (int y = center.y - radius; y <= center.y + radius; ++y) {
+        for (int x = center.x - radius; x <= center.x + radius; ++x) {
+            const GridCoord cell{x, y};
+            if (!terrain.isValidCell(cell)) {
+                continue;
+            }
+            const int dx = x - center.x;
+            const int dy = y - center.y;
+            if ((dx * dx) + (dy * dy) > radius * radius) {
+                continue;
+            }
+            terrain.setTerrainType(cell, type);
+            terrain.setElevation(cell, lerp_scalar(terrain.elevation(cell), elevation_target, 0.7f));
+        }
+    }
+}
+
 void paint_demo_terrain(TerrainGrid& terrain) {
-    // first add a small wave to the terrain so the world feels less flat
-    // the amplitude stays low because gameplay still assumes essentially planar interaction
+    // generate a slightly more organic battlefield with a river spine,
+    // higher rocky ridges, and clustered forests while keeping clear lanes for play
     for (int y = 0; y < terrain.height(); ++y) {
         for (int x = 0; x < terrain.width(); ++x) {
             const GridCoord cell{x, y};
-            const float dx = static_cast<float>(x - terrain.width() / 2);
-            const float dy = static_cast<float>(y - terrain.height() / 2);
-            terrain.setElevation(cell, 0.08f * std::sin(dx * 0.28f) + 0.05f * std::cos(dy * 0.35f));
+            terrain.setTerrainType(cell, TerrainType::grass);
+
+            const float nx =
+                static_cast<float>(x) / static_cast<float>(std::max(terrain.width() - 1, 1));
+            const float ny =
+                static_cast<float>(y) / static_cast<float>(std::max(terrain.height() - 1, 1));
+            const float broad = fbm_noise(nx * 2.6f + 4.3f, ny * 2.6f - 1.7f);
+            const float detail = fbm_noise(nx * 6.8f - 9.2f, ny * 6.8f + 3.5f);
+            const float ridge =
+                1.0f - std::fabs(fbm_noise(nx * 4.4f + 8.0f, ny * 4.4f - 2.0f) * 2.0f - 1.0f);
+            const float center_bias =
+                1.0f - std::abs(nx - 0.5f) * 0.9f - std::abs(ny - 0.5f) * 0.8f;
+            const float elevation =
+                (broad - 0.5f) * 0.42f +
+                (detail - 0.5f) * 0.12f +
+                ridge * 0.10f +
+                center_bias * 0.04f;
+            terrain.setElevation(cell, elevation);
         }
     }
 
-    // lay down a cross road through the center so armies predictably meet in a readable area
-    for (int x = 0; x < terrain.width(); ++x) {
-        terrain.setTerrainType(GridCoord{x, 11}, TerrainType::road);
-        terrain.setTerrainType(GridCoord{x, 12}, TerrainType::road);
-    }
+    // carve a wavy river that forces a bridge fight near the center
     for (int y = 0; y < terrain.height(); ++y) {
-        terrain.setTerrainType(GridCoord{11, y}, TerrainType::road);
-        terrain.setTerrainType(GridCoord{12, y}, TerrainType::road);
+        const float river_center =
+            11.0f + std::sin(static_cast<float>(y) * 0.34f + 0.8f) * 2.1f +
+            std::sin(static_cast<float>(y) * 0.12f + 2.2f) * 0.9f;
+        for (int x = 0; x < terrain.width(); ++x) {
+            const float distance = std::fabs(static_cast<float>(x) - river_center);
+            if (distance > 1.15f || (y >= 10 && y <= 12)) {
+                continue;
+            }
+            const GridCoord cell{x, y};
+            terrain.setTerrainType(cell, TerrainType::water);
+            terrain.setElevation(cell, -0.18f - (1.15f - distance) * 0.05f);
+        }
     }
 
-    // carve out a few themed obstacle regions so pathing and placement look more interesting
-    for (int y = 4; y <= 8; ++y) {
-        for (int x = 3; x <= 6; ++x) {
-            terrain.setTerrainType(GridCoord{x, y}, TerrainType::forest);
+    // add ridges and groves away from the bridge lane
+    for (int y = 0; y < terrain.height(); ++y) {
+        for (int x = 0; x < terrain.width(); ++x) {
+            const GridCoord cell{x, y};
+            if (terrain.terrainType(cell) == TerrainType::water) {
+                continue;
+            }
+
+            const float nx =
+                static_cast<float>(x) / static_cast<float>(std::max(terrain.width() - 1, 1));
+            const float ny =
+                static_cast<float>(y) / static_cast<float>(std::max(terrain.height() - 1, 1));
+            const float forest_noise = fbm_noise(nx * 7.4f + 1.3f, ny * 7.4f + 8.1f);
+            const float rock_noise = fbm_noise(nx * 6.0f - 4.8f, ny * 6.0f + 11.4f);
+            const float local_height = terrain.elevation(cell);
+            const bool in_center_lane = std::abs(y - 11) <= 2 || std::abs(x - 11) <= 1;
+
+            if (!in_center_lane && rock_noise > 0.72f && local_height > 0.03f) {
+                terrain.setTerrainType(cell, TerrainType::rock);
+                terrain.setElevation(cell, terrain.elevation(cell) + 0.14f);
+            } else if (!in_center_lane && forest_noise > 0.60f) {
+                terrain.setTerrainType(cell, TerrainType::forest);
+                terrain.setElevation(cell, terrain.elevation(cell) + 0.03f);
+            }
         }
     }
-    for (int y = 15; y <= 18; ++y) {
-        for (int x = 15; x <= 19; ++x) {
-            terrain.setTerrainType(GridCoord{x, y}, TerrainType::forest);
+
+    // lay down broad roads between the two bases and across the bridge
+    for (int x = 0; x < terrain.width(); ++x) {
+        for (int y = 10; y <= 12; ++y) {
+            terrain.setTerrainType(GridCoord{x, y}, TerrainType::road);
+            terrain.setElevation(GridCoord{x, y}, lerp_scalar(terrain.elevation(GridCoord{x, y}), 0.02f, 0.85f));
         }
     }
-    for (int y = 6; y <= 9; ++y) {
-        for (int x = 15; x <= 18; ++x) {
-            terrain.setTerrainType(GridCoord{x, y}, TerrainType::water);
+    for (int y = 7; y <= 14; ++y) {
+        for (int x = 8; x <= 10; ++x) {
+            terrain.setTerrainType(GridCoord{x, y}, TerrainType::road);
+            terrain.setElevation(GridCoord{x, y}, lerp_scalar(terrain.elevation(GridCoord{x, y}), 0.02f, 0.85f));
         }
     }
-    for (int y = 16; y <= 19; ++y) {
-        for (int x = 5; x <= 8; ++x) {
-            terrain.setTerrainType(GridCoord{x, y}, TerrainType::rock);
+    for (int y = 8; y <= 15; ++y) {
+        for (int x = 15; x <= 17; ++x) {
+            terrain.setTerrainType(GridCoord{x, y}, TerrainType::road);
+            terrain.setElevation(GridCoord{x, y}, lerp_scalar(terrain.elevation(GridCoord{x, y}), 0.02f, 0.85f));
         }
     }
+
+    // reserve playable courtyards around fixed building and resource sites
+    flatten_rect_zone(terrain, kPlayerDepotAnchor, 3, 2, 2, TerrainType::road, 0.03f);
+    flatten_rect_zone(terrain, kPlayerFarmAnchor, 2, 2, 1, TerrainType::grass, 0.05f);
+    flatten_rect_zone(terrain, kEnemyDepotAnchor, 3, 2, 2, TerrainType::road, 0.03f);
+    flatten_rect_zone(terrain, kEnemyTowerAnchor, 2, 2, 1, TerrainType::road, 0.05f);
+    flatten_rect_zone(terrain, kEnemyFarmAnchor, 2, 2, 1, TerrainType::grass, 0.05f);
+    flatten_circle_zone(terrain, GridCoord{5, 7}, 2, TerrainType::grass, 0.06f);
+    flatten_circle_zone(terrain, GridCoord{18, 14}, 2, TerrainType::grass, 0.06f);
+    flatten_circle_zone(terrain, GridCoord{11, 5}, 2, TerrainType::grass, 0.08f);
 }
 
 void register_demo_archetypes(RtsWorld& world) {
@@ -873,12 +1229,12 @@ void register_demo_archetypes(RtsWorld& world) {
         0.0f,
         0.0f,
         0.0f,
-        {},
+        {RtsResourceCost{"ore", 70}},
         {},
         4,
         false,
         350.0f,
-        0.0f,
+        1.8f,
         28.0f,
         4.0f
     });
@@ -890,12 +1246,12 @@ void register_demo_archetypes(RtsWorld& world) {
         0.0f,
         0.0f,
         0.0f,
-        {},
+        {RtsResourceCost{"ore", 110}},
         {kUnitArchetypeWorker, kUnitArchetypePlayer, kUnitArchetypeEnemyWorker, kUnitArchetypeEnemy},
         8,
         true,
         350.0f,
-        0.0f,
+        2.8f,
         28.0f,
         8.0f
     });
@@ -907,12 +1263,12 @@ void register_demo_archetypes(RtsWorld& world) {
         12.0f,
         1.0f,
         6.0f,
-        {},
+        {RtsResourceCost{"ore", 120}},
         {},
         0,
         false,
         350.0f,
-        0.0f,
+        2.6f,
         28.0f,
         7.0f
     });
@@ -932,11 +1288,18 @@ void seed_demo_buildings(RtsWorld& world) {
     // opening structures are placed so both teams have a base anchor
     // a road lane to contest
     // and one early defensive tower for the enemy side
-    world.placeBuildingFromArchetype(0, kBuildingDepot, GridCoord{8, 9});
-    world.placeBuildingFromArchetype(0, kBuildingFarm, GridCoord{3, 14});
-    world.placeBuildingFromArchetype(1, kBuildingDepot, GridCoord{16, 10});
-    world.placeBuildingFromArchetype(1, kBuildingTower, GridCoord{13, 9});
-    world.placeBuildingFromArchetype(1, kBuildingFarm, GridCoord{18, 3});
+    const auto player_depot = world.placeBuildingFromArchetype(0, kBuildingDepot, kPlayerDepotAnchor);
+    world.placeBuildingFromArchetype(0, kBuildingFarm, kPlayerFarmAnchor);
+    const auto enemy_depot = world.placeBuildingFromArchetype(1, kBuildingDepot, kEnemyDepotAnchor);
+    world.placeBuildingFromArchetype(1, kBuildingTower, kEnemyTowerAnchor);
+    world.placeBuildingFromArchetype(1, kBuildingFarm, kEnemyFarmAnchor);
+
+    if (player_depot.has_value()) {
+        world.setProductionRallyPoint(player_depot.value(), world.terrain().cellCenter(GridCoord{11, 11}));
+    }
+    if (enemy_depot.has_value()) {
+        world.setProductionRallyPoint(enemy_depot.value(), world.terrain().cellCenter(GridCoord{14, 11}));
+    }
 }
 
 void seed_demo_units(RtsWorld& world) {
@@ -977,14 +1340,15 @@ void seed_demo_units(RtsWorld& world) {
 
 void seed_demo_economy(RtsWorld& world) {
     // both teams start with some ore so production and building can happen immediately
-    // resource nodes are clustered to encourage worker trips and map movement
-    world.setTeamResourceAmount(0, "ore", 150);
-    world.setTeamResourceAmount(1, "ore", 45);
-    world.addResourceNode("ore", GridCoord{5, 6}, 160);
-    world.addResourceNode("ore", GridCoord{6, 6}, 160);
-    world.addResourceNode("ore", GridCoord{16, 16}, 220);
-    world.addResourceNode("ore", GridCoord{18, 14}, 180);
-    world.addResourceNode("ore", GridCoord{19, 14}, 180);
+    // resource nodes form one safe cluster per side plus one contested bridge-side cluster
+    world.setTeamResourceAmount(0, "ore", 240);
+    world.setTeamResourceAmount(1, "ore", 70);
+    world.addResourceNode("ore", GridCoord{5, 6}, 180);
+    world.addResourceNode("ore", GridCoord{5, 8}, 160);
+    world.addResourceNode("ore", GridCoord{11, 5}, 200);
+    world.addResourceNode("ore", GridCoord{12, 5}, 180);
+    world.addResourceNode("ore", GridCoord{18, 14}, 190);
+    world.addResourceNode("ore", GridCoord{19, 14}, 170);
 }
 
 void configure_demo_enemy_ai(RtsWorld& world) {
@@ -1024,17 +1388,13 @@ void update_window_title(SDL_Window* window,
     const int ore = world.teamResourceAmount(0, "ore");
     const int supply_used = world.teamSupplyUsed(0);
     const int supply_cap = world.teamSupplyProvided(0);
-    // the title bar doubles as the text HUD for this demo
-    // that avoids depending on font rendering while still showing useful state
+    // keep the native title concise now that the demo has an on-screen HUD
     const std::string title =
         "RTS Demo | Selected: " + std::to_string(selected_unit_count(visuals, snapshot_map_from_vector(snapshots))) +
         " | Ore: " + std::to_string(ore) +
         " | Supply: " + std::to_string(supply_used) + "/" + std::to_string(supply_cap) +
-        " | Blue: " + std::to_string(team_unit_count(snapshots, 0)) +
-        " | Red: " + std::to_string(team_unit_count(snapshots, 1)) +
         " | Mode: " + mode +
-        outcome +
-        " | LMB select | RMB command/place/harvest | Arrows pan | A arm atk-move | S stop | H hold | Q worker | E infantry";
+        outcome;
     SDL_SetWindowTitle(window, title.c_str());
 }
 
@@ -1073,7 +1433,7 @@ void render_scene(const DrawState& draw_state,
 
     glViewport(0, 0, draw_width, draw_height);
     glEnable(GL_DEPTH_TEST);
-    glClearColor(0.07f, 0.10f, 0.12f, 1.0f);
+    glClearColor(0.10f, 0.15f, 0.17f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     const glm::mat4 projection = build_isometric_projection(window, camera.zoom);
@@ -1123,6 +1483,109 @@ void render_scene(const DrawState& draw_state,
                        light_position,
                        final_color,
                        terrain_cell.type == TerrainType::road ? 1 : 0);
+
+            if (vis == VisibilityState::unexplored) {
+                continue;
+            }
+
+            const float noise_a = cell_noise(x, y);
+            const float noise_b = cell_noise(y + 7, x + 13);
+            switch (terrain_cell.type) {
+            case TerrainType::water:
+                draw_shape(draw_state,
+                           cube_shape,
+                           make_transform(glm::vec3(center.x,
+                                                    center.y + tile_height + 0.005f,
+                                                    center.z),
+                                          0.0f,
+                                          glm::vec3(terrain.cellSize() * 0.90f,
+                                                    0.016f,
+                                                    terrain.cellSize() * 0.90f)),
+                           view,
+                           projection,
+                           light_position,
+                           glm::mix(final_color, glm::vec3(0.30f, 0.64f, 0.86f), 0.45f),
+                           3);
+                break;
+            case TerrainType::forest: {
+                const glm::vec3 trunk_offset(
+                    (noise_a - 0.5f) * terrain.cellSize() * 0.18f,
+                    0.0f,
+                    (noise_b - 0.5f) * terrain.cellSize() * 0.18f);
+                draw_shape(draw_state,
+                           cube_shape,
+                           make_transform(center + trunk_offset + glm::vec3(0.0f, 0.28f, 0.0f),
+                                          0.0f,
+                                          glm::vec3(0.09f, 0.46f, 0.09f)),
+                           view,
+                           projection,
+                           light_position,
+                           glm::vec3(0.22f, 0.16f, 0.10f),
+                           0);
+                draw_shape(draw_state,
+                           cube_shape,
+                           make_transform(center + trunk_offset + glm::vec3(0.0f, 0.74f, 0.0f),
+                                          0.0f,
+                                          glm::vec3(0.46f + noise_a * 0.10f,
+                                                    0.44f + noise_b * 0.12f,
+                                                    0.46f + noise_b * 0.10f)),
+                           view,
+                           projection,
+                           light_position,
+                           glm::mix(final_color, glm::vec3(0.28f, 0.44f, 0.18f), 0.55f),
+                           4);
+                break;
+            }
+            case TerrainType::rock:
+                draw_shape(draw_state,
+                           cube_shape,
+                           make_transform(center + glm::vec3((noise_a - 0.5f) * 0.18f,
+                                                              0.20f + noise_b * 0.08f,
+                                                              (noise_b - 0.5f) * 0.18f),
+                                          noise_a * 0.9f,
+                                          glm::vec3(0.42f + noise_a * 0.12f,
+                                                    0.26f + noise_b * 0.10f,
+                                                    0.34f + noise_b * 0.12f)),
+                           view,
+                           projection,
+                           light_position,
+                           glm::mix(final_color, glm::vec3(0.58f, 0.58f, 0.60f), 0.25f),
+                           0);
+                if (noise_a > 0.58f) {
+                    draw_shape(draw_state,
+                               cube_shape,
+                               make_transform(center + glm::vec3(-0.18f,
+                                                                  0.12f + noise_a * 0.04f,
+                                                                  0.11f),
+                                              noise_b * 1.1f,
+                                              glm::vec3(0.24f, 0.18f, 0.22f)),
+                               view,
+                               projection,
+                               light_position,
+                               glm::mix(final_color, glm::vec3(0.65f, 0.66f, 0.68f), 0.18f),
+                               0);
+                }
+                break;
+            case TerrainType::grass:
+                if (noise_a > 0.86f) {
+                    draw_shape(draw_state,
+                               cube_shape,
+                               make_transform(center + glm::vec3((noise_b - 0.5f) * 0.20f,
+                                                                  0.07f,
+                                                                  (noise_a - 0.5f) * 0.20f),
+                                              0.0f,
+                                              glm::vec3(0.10f, 0.07f + noise_b * 0.05f, 0.10f)),
+                               view,
+                               projection,
+                               light_position,
+                               glm::vec3(0.34f, 0.48f, 0.23f),
+                               4);
+                }
+                break;
+            case TerrainType::road:
+            default:
+                break;
+            }
         }
     }
 
@@ -1137,22 +1600,31 @@ void render_scene(const DrawState& draw_state,
 
         const bool is_hovered =
             hovered_building.has_value() && hovered_building.value() == building.building_id;
-        const glm::vec3 body_color = is_hovered
-                                         ? glm::vec3(0.95f, 0.46f, 0.34f)
-                                         : tinted_building_color(style->color, building.team);
+        glm::vec3 body_color = is_hovered
+                                   ? glm::vec3(0.95f, 0.46f, 0.34f)
+                                   : tinted_building_color(style->color, building.team);
+        const float construction_ratio = building.under_construction
+                                             ? std::clamp(0.22f + building.construction_progress * 0.78f,
+                                                          0.22f,
+                                                          1.0f)
+                                             : 1.0f;
+        if (building.under_construction) {
+            body_color = glm::mix(body_color, glm::vec3(0.54f, 0.49f, 0.36f), 0.42f);
+        }
         const glm::vec3 roof_color = is_hovered
                                          ? glm::vec3(1.0f, 0.75f, 0.28f)
                                          : building_roof_color(body_color);
+        const float rendered_height = style->height * construction_ratio;
         const glm::vec3 footprint_scale(
             static_cast<float>(building.footprint_width) * terrain.cellSize() * 0.86f,
-            style->height,
+            rendered_height,
             static_cast<float>(building.footprint_height) * terrain.cellSize() * 0.86f);
 
         // each building is rendered as a simple body plus a thin roof slab
         // the shape language stays primitive on purpose so the demo emphasizes gameplay readability
         draw_shape(draw_state,
                    cube_shape,
-                   make_transform(building.center + glm::vec3(0.0f, style->height * 0.5f, 0.0f),
+                   make_transform(building.center + glm::vec3(0.0f, rendered_height * 0.5f, 0.0f),
                                   0.0f,
                                   footprint_scale),
                    view,
@@ -1162,14 +1634,41 @@ void render_scene(const DrawState& draw_state,
                    0);
         draw_shape(draw_state,
                    cube_shape,
-                   make_transform(building.center + glm::vec3(0.0f, style->height + 0.12f, 0.0f),
+                   make_transform(building.center + glm::vec3(0.0f, rendered_height + 0.12f, 0.0f),
                                   0.0f,
                                   glm::vec3(footprint_scale.x * 0.9f, 0.22f, footprint_scale.z * 0.9f)),
                    view,
                    projection,
                    light_position,
                    roof_color,
-                   0);
+                   building.under_construction ? 2 : 0);
+        if (!building.under_construction) {
+            const glm::vec3 banner_color = glm::mix(team_color(building.team), glm::vec3(1.0f), 0.15f);
+            draw_shape(draw_state,
+                       cube_shape,
+                       make_transform(building.center + glm::vec3(footprint_scale.x * 0.24f,
+                                                                  rendered_height + 0.44f,
+                                                                  -footprint_scale.z * 0.18f),
+                                      0.0f,
+                                      glm::vec3(0.05f, 0.56f, 0.05f)),
+                       view,
+                       projection,
+                       light_position,
+                       glm::vec3(0.15f, 0.16f, 0.17f),
+                       0);
+            draw_shape(draw_state,
+                       cube_shape,
+                       make_transform(building.center + glm::vec3(footprint_scale.x * 0.34f,
+                                                                  rendered_height + 0.58f,
+                                                                  -footprint_scale.z * 0.18f),
+                                      0.0f,
+                                      glm::vec3(0.22f, 0.14f, 0.04f)),
+                       view,
+                       projection,
+                       light_position,
+                       banner_color,
+                       2);
+        }
     }
 
     if (build_mode.active && build_mode.has_preview) {
@@ -1210,14 +1709,44 @@ void render_scene(const DrawState& draw_state,
         }
         draw_shape(draw_state,
                    cube_shape,
-                   make_transform(resource_node.center + glm::vec3(0.0f, 0.25f + fullness * 0.35f, 0.0f),
+                   make_transform(resource_node.center + glm::vec3(0.0f, 0.08f, 0.0f),
                                   0.0f,
-                                  glm::vec3(0.45f, 0.5f + fullness * 0.7f, 0.45f)),
+                                  glm::vec3(0.54f, 0.08f, 0.54f)),
+                   view,
+                   projection,
+                   light_position,
+                   glm::vec3(0.20f, 0.17f, 0.13f),
+                   0);
+        draw_shape(draw_state,
+                   cube_shape,
+                   make_transform(resource_node.center + glm::vec3(0.0f, 0.32f + fullness * 0.46f, 0.0f),
+                                  0.0f,
+                                  glm::vec3(0.34f, 0.64f + fullness * 0.72f, 0.34f)),
                    view,
                    projection,
                    light_position,
                    node_color,
-                   2);
+                   4);
+        draw_shape(draw_state,
+                   cube_shape,
+                   make_transform(resource_node.center + glm::vec3(-0.18f, 0.20f + fullness * 0.22f, 0.14f),
+                                  0.3f,
+                                  glm::vec3(0.12f, 0.26f + fullness * 0.18f, 0.12f)),
+                   view,
+                   projection,
+                   light_position,
+                   glm::mix(node_color, glm::vec3(1.0f, 0.88f, 0.46f), 0.35f),
+                   4);
+        draw_shape(draw_state,
+                   cube_shape,
+                   make_transform(resource_node.center + glm::vec3(0.15f, 0.17f + fullness * 0.18f, -0.12f),
+                                  -0.35f,
+                                  glm::vec3(0.11f, 0.22f + fullness * 0.16f, 0.11f)),
+                   view,
+                   projection,
+                   light_position,
+                   glm::mix(node_color, glm::vec3(1.0f, 0.84f, 0.42f), 0.28f),
+                   4);
     }
 
     for (const RtsWorldProjectileSnapshot& projectile : world.projectileSnapshots()) {
@@ -1421,8 +1950,142 @@ void draw_selection_overlay(SDL_Window* window, const SelectionState& selection)
     glDisable(GL_SCISSOR_TEST);
 }
 
+void increment_label_count(std::vector<std::pair<std::string, int>>& counts,
+                           const std::string& label) {
+    for (auto& entry : counts) {
+        if (entry.first == label) {
+            ++entry.second;
+            return;
+        }
+    }
+    counts.emplace_back(label, 1);
+}
+
+std::string team_label(int team) {
+    return team == 0 ? "BLUE" : "RED";
+}
+
+void draw_labeled_meter(SDL_Window* window,
+                        int x,
+                        int y,
+                        int width,
+                        const std::string& label,
+                        const std::string& value,
+                        float ratio,
+                        const glm::vec3& fill_color,
+                        const glm::vec3& track_color) {
+    draw_pixel_text(window, x, y, label, 2, glm::vec3(0.92f, 0.94f, 0.95f));
+    draw_pixel_text_right(window, x + width, y, value, 2, glm::vec3(0.92f, 0.94f, 0.95f));
+    draw_screen_rect(window, x, y + 18, width, 12, track_color);
+    const int fill_width =
+        std::clamp(static_cast<int>(static_cast<float>(width) * std::clamp(ratio, 0.0f, 1.0f)),
+                   0,
+                   width);
+    if (fill_width > 0) {
+        draw_screen_rect(window, x, y + 18, fill_width, 12, fill_color);
+    }
+    draw_screen_rect(window, x, y + 18, width, 2, glm::vec3(1.0f));
+}
+
+void draw_minimap_panel(SDL_Window* window,
+                        int x,
+                        int y,
+                        const RtsWorld& world,
+                        const CameraState& camera,
+                        const std::vector<RtsWorldUnitSnapshot>& unit_snapshots,
+                        const std::unordered_map<std::uint32_t, UnitVisualState>& unit_visuals) {
+    const TerrainGrid& terrain = world.terrain();
+    const int cell_pixels = 6;
+    const int map_x = x + 18;
+    const int map_y = y + 30;
+
+    draw_panel(window, x, y, 206, 196, glm::vec3(0.08f, 0.11f, 0.13f), glm::vec3(0.26f, 0.70f, 0.78f));
+    draw_pixel_text(window, x + 16, y + 8, "MINIMAP", 2, glm::vec3(0.90f, 0.95f, 0.98f));
+
+    for (int cell_y = 0; cell_y < terrain.height(); ++cell_y) {
+        for (int cell_x = 0; cell_x < terrain.width(); ++cell_x) {
+            const GridCoord cell{cell_x, cell_y};
+            glm::vec3 color = terrain_color(terrain.cell(cell));
+            const VisibilityState vis = world.cellVisibilityForTeam(0, cell);
+            if (vis == VisibilityState::unexplored) {
+                color = glm::vec3(0.03f, 0.04f, 0.05f);
+            } else if (vis == VisibilityState::explored) {
+                color *= 0.45f;
+            }
+            draw_screen_rect(window,
+                             map_x + cell_x * cell_pixels,
+                             map_y + cell_y * cell_pixels,
+                             cell_pixels - 1,
+                             cell_pixels - 1,
+                             color);
+        }
+    }
+
+    for (const RtsWorldResourceNodeSnapshot& node : world.resourceNodeSnapshots()) {
+        const VisibilityState vis = world.cellVisibilityForTeam(0, node.cell);
+        if (vis == VisibilityState::unexplored) {
+            continue;
+        }
+        draw_screen_rect(window,
+                         map_x + node.cell.x * cell_pixels + 1,
+                         map_y + node.cell.y * cell_pixels + 1,
+                         cell_pixels - 3,
+                         cell_pixels - 3,
+                         glm::vec3(0.90f, 0.76f, 0.25f));
+    }
+
+    for (const RtsWorldBuildingSnapshot& building : world.buildingSnapshots()) {
+        if (building.team != 0 && !world.isBuildingVisibleToTeam(0, building.building_id)) {
+            continue;
+        }
+        draw_screen_rect(window,
+                         map_x + building.anchor.x * cell_pixels,
+                         map_y + building.anchor.y * cell_pixels,
+                         std::max(2, building.footprint_width * cell_pixels - 1),
+                         std::max(2, building.footprint_height * cell_pixels - 1),
+                         building.team == 0 ? glm::vec3(0.28f, 0.66f, 0.95f)
+                                            : glm::vec3(0.92f, 0.38f, 0.28f));
+    }
+
+    for (const RtsWorldUnitSnapshot& snapshot : unit_snapshots) {
+        if (snapshot.team != 0 && !world.isUnitVisibleToTeam(0, snapshot.unit_id)) {
+            continue;
+        }
+        GridCoord cell{};
+        if (!terrain.worldToCell(snapshot.position, cell)) {
+            continue;
+        }
+        const auto visual_it = unit_visuals.find(snapshot.unit_id);
+        const bool selected =
+            visual_it != unit_visuals.end() && visual_it->second.selected && snapshot.team == 0;
+        draw_screen_rect(window,
+                         map_x + cell.x * cell_pixels + 2,
+                         map_y + cell.y * cell_pixels + 2,
+                         selected ? 4 : 3,
+                         selected ? 4 : 3,
+                         selected ? glm::vec3(0.98f, 0.88f, 0.30f)
+                                  : (snapshot.team == 0 ? glm::vec3(0.68f, 0.88f, 1.0f)
+                                                        : glm::vec3(1.0f, 0.66f, 0.52f)));
+    }
+
+    GridCoord focus_cell{};
+    if (terrain.worldToCell(camera.focus, focus_cell)) {
+        const int focus_x = map_x + focus_cell.x * cell_pixels - 2;
+        const int focus_y = map_y + focus_cell.y * cell_pixels - 2;
+        draw_screen_rect(window, focus_x, focus_y, cell_pixels + 3, 2, glm::vec3(0.96f, 0.95f, 0.80f));
+        draw_screen_rect(window, focus_x, focus_y + cell_pixels + 1, cell_pixels + 3, 2, glm::vec3(0.96f, 0.95f, 0.80f));
+        draw_screen_rect(window, focus_x, focus_y, 2, cell_pixels + 3, glm::vec3(0.96f, 0.95f, 0.80f));
+        draw_screen_rect(window, focus_x + cell_pixels + 1, focus_y, 2, cell_pixels + 3, glm::vec3(0.96f, 0.95f, 0.80f));
+    }
+
+    draw_pixel_text(window, x + 16, y + 178, "GOLD DOTS ARE ORE", 1, glm::vec3(0.78f, 0.82f, 0.85f));
+}
+
 void draw_hud_overlay(SDL_Window* window,
                       const RtsWorld& world,
+                      const CameraState& camera,
+                      const BuildModeState& build_mode,
+                      bool attack_move_armed,
                       const std::vector<RtsWorldUnitSnapshot>& unit_snapshots,
                       const std::unordered_map<std::uint32_t, UnitVisualState>& unit_visuals,
                       const std::optional<std::uint32_t>& hovered_building,
@@ -1436,6 +2099,20 @@ void draw_hud_overlay(SDL_Window* window,
     int selected_workers = 0;
     int carried_total = 0;
     float average_health_ratio = 0.0f;
+    float army_health_ratio = 0.0f;
+    std::vector<std::pair<std::string, int>> composition{};
+    int player_unit_counter = 0;
+    for (const RtsWorldUnitSnapshot& snapshot : unit_snapshots) {
+        if (snapshot.team != 0) {
+            continue;
+        }
+        army_health_ratio += std::clamp(snapshot.health / std::max(snapshot.max_health, 0.001f), 0.0f, 1.0f);
+        ++player_unit_counter;
+    }
+    if (player_unit_counter > 0) {
+        army_health_ratio /= static_cast<float>(player_unit_counter);
+    }
+
     for (const std::uint32_t unit_id : selected_ids) {
         const auto it = snapshot_map.find(unit_id);
         if (it == snapshot_map.end()) {
@@ -1445,17 +2122,28 @@ void draw_hud_overlay(SDL_Window* window,
                                            0.0f,
                                            1.0f);
         carried_total += it->second.carried_resource_amount;
-        if (it->second.carried_resource_id == "ore" || it->second.carried_resource_amount > 0) {
+        const std::string unit_label = readable_unit_label(it->second.archetype_id);
+        increment_label_count(composition, unit_label);
+        if (unit_label == "WORKER") {
             ++selected_workers;
         }
     }
     if (!selected_ids.empty()) {
         average_health_ratio /= static_cast<float>(selected_ids.size());
     }
+    std::sort(composition.begin(), composition.end(),
+              [](const auto& lhs, const auto& rhs) {
+                  if (lhs.second == rhs.second) {
+                      return lhs.first < rhs.first;
+                  }
+                  return lhs.second > rhs.second;
+              });
 
     const int ore = world.teamResourceAmount(0, "ore");
     const int supply_used = world.teamSupplyUsed(0);
     const int supply_cap = std::max(world.teamSupplyProvided(0), 1);
+    const int blue_units = static_cast<int>(team_unit_count(unit_snapshots, 0));
+    const int red_units = static_cast<int>(team_unit_count(unit_snapshots, 1));
     const float ore_ratio = std::clamp(static_cast<float>(ore) / 300.0f, 0.0f, 1.0f);
     const float supply_ratio = std::clamp(static_cast<float>(supply_used) /
                                               static_cast<float>(supply_cap),
@@ -1468,35 +2156,42 @@ void draw_hud_overlay(SDL_Window* window,
     const float combat_flash =
         std::clamp(hud_pulses.combat_flash_timer / kHudPulseDuration, 0.0f, 1.0f);
 
-    // this overlay is deliberately abstract rather than text heavy
-    // wide colored bars communicate resources supply and selected force health quickly
-    draw_screen_rect(window, 16, 16, 274, 112, glm::vec3(0.06f, 0.08f, 0.10f));
-    draw_screen_rect(window,
-                     22,
-                     22,
-                     262,
-                     26,
-                     glm::mix(glm::vec3(0.28f, 0.20f, 0.08f), glm::vec3(0.92f, 0.76f, 0.20f), resource_flash * 0.45f));
-    draw_screen_rect(window, 24, 24, static_cast<int>(258.0f * ore_ratio), 22, glm::vec3(0.86f, 0.72f, 0.22f));
-    draw_screen_rect(window,
-                     22,
-                     54,
-                     262,
-                     22,
-                     glm::mix(glm::vec3(0.10f, 0.19f, 0.28f), glm::vec3(0.34f, 0.72f, 0.95f), production_flash * 0.35f));
-    draw_screen_rect(window, 24, 56, static_cast<int>(258.0f * supply_ratio), 18, glm::vec3(0.28f, 0.66f, 0.95f));
-    draw_screen_rect(window,
-                     22,
-                     82,
-                     262,
-                     18,
-                     glm::mix(glm::vec3(0.10f, 0.16f, 0.10f), glm::vec3(0.34f, 0.86f, 0.40f), combat_flash * 0.35f));
-    draw_screen_rect(window,
-                     24,
-                     84,
-                     static_cast<int>(258.0f * std::max(average_health_ratio, 0.08f)),
-                     14,
-                     glm::vec3(0.34f, 0.84f, 0.40f));
+    // top-left battlefield state panel
+    draw_panel(window, 16, 16, 352, 154, glm::vec3(0.07f, 0.09f, 0.11f), glm::vec3(0.94f, 0.74f, 0.28f));
+    draw_pixel_text(window, 30, 28, "BATTLEFIELD STATUS", 2, glm::vec3(0.95f, 0.96f, 0.98f));
+    draw_labeled_meter(window,
+                       30,
+                       58,
+                       324,
+                       "ORE",
+                       std::to_string(ore),
+                       ore_ratio,
+                       glm::mix(glm::vec3(0.76f, 0.60f, 0.14f), glm::vec3(0.96f, 0.82f, 0.22f), resource_flash * 0.45f),
+                       glm::vec3(0.22f, 0.18f, 0.10f));
+    draw_labeled_meter(window,
+                       30,
+                       92,
+                       324,
+                       "SUPPLY",
+                       std::to_string(supply_used) + "/" + std::to_string(supply_cap),
+                       supply_ratio,
+                       glm::mix(glm::vec3(0.22f, 0.56f, 0.82f), glm::vec3(0.36f, 0.84f, 1.0f), production_flash * 0.35f),
+                       glm::vec3(0.11f, 0.18f, 0.26f));
+    draw_labeled_meter(window,
+                       30,
+                       126,
+                       184,
+                       "ARMY",
+                       std::to_string(static_cast<int>(std::round(army_health_ratio * 100.0f))),
+                       std::max(army_health_ratio, 0.02f),
+                       glm::mix(glm::vec3(0.24f, 0.68f, 0.34f), glm::vec3(0.48f, 0.95f, 0.50f), combat_flash * 0.30f),
+                       glm::vec3(0.12f, 0.19f, 0.12f));
+    draw_pixel_text(window,
+                    184,
+                    128,
+                    "BLUE " + std::to_string(blue_units) + "  RED " + std::to_string(red_units),
+                    2,
+                    glm::vec3(0.84f, 0.88f, 0.92f));
 
     const std::vector<RtsWorldProductionSnapshot> production_snapshots = world.productionSnapshots();
     const RtsWorldProductionSnapshot* hovered_production = nullptr;
@@ -1508,48 +2203,181 @@ void draw_hud_overlay(SDL_Window* window,
             }
         }
     }
-    if (hovered_production) {
-        // when hovering a friendly producer show up to five queue slots with simple fill bars
-        draw_screen_rect(window, 16, 136, 274, 72, glm::vec3(0.07f, 0.08f, 0.10f));
-        for (std::size_t i = 0; i < std::min<std::size_t>(hovered_production->queue.size(), 5); ++i) {
-            const int x = 24 + static_cast<int>(i) * 48;
-            const glm::vec3 slot_color = hovered_production->queue[i].active
-                                             ? glm::mix(glm::vec3(0.22f, 0.36f, 0.62f),
-                                                        glm::vec3(0.36f, 0.80f, 1.0f),
-                                                        production_flash * 0.4f)
-                                             : glm::vec3(0.22f, 0.26f, 0.30f);
-            draw_screen_rect(window, x, 144, 40, 40, slot_color);
-            const float progress_ratio = hovered_production->queue[i].remaining_time > 0.0f
-                                             ? std::clamp(1.0f -
-                                                              (hovered_production->queue[i].remaining_time / 1.2f),
-                                                          0.0f,
-                                                          1.0f)
-                                             : 1.0f;
-            draw_screen_rect(window, x, 188, static_cast<int>(40.0f * progress_ratio), 8, glm::vec3(0.86f, 0.72f, 0.22f));
+
+    // center status banner
+    std::string banner_text = "COMMAND READY";
+    glm::vec3 banner_accent(0.28f, 0.68f, 0.80f);
+    if (world.isMatchOver() && world.winningTeam().has_value()) {
+        banner_text = world.winningTeam().value() == 0 ? "VICTORY" : "DEFEAT";
+        banner_accent = world.winningTeam().value() == 0
+                            ? glm::vec3(0.90f, 0.74f, 0.22f)
+                            : glm::vec3(0.92f, 0.34f, 0.28f);
+    } else if (attack_move_armed) {
+        banner_text = "ATTACK MOVE ARMED";
+        banner_accent = glm::vec3(0.96f, 0.58f, 0.24f);
+    } else if (build_mode.active) {
+        banner_text = "BUILD " + std::string(build_mode.label);
+        banner_accent = glm::vec3(0.42f, 0.86f, 0.50f);
+    }
+    const int banner_width = 296;
+    draw_panel(window,
+               (kWindowWidth - banner_width) / 2,
+               18,
+               banner_width,
+               50,
+               glm::vec3(0.08f, 0.11f, 0.13f),
+               banner_accent);
+    draw_pixel_text(window,
+                    (kWindowWidth - pixel_text_width(banner_text, 2)) / 2,
+                    33,
+                    banner_text,
+                    2,
+                    glm::vec3(0.96f, 0.97f, 0.98f));
+
+    // right-side context panel
+    draw_panel(window, 944, 16, 320, 190, glm::vec3(0.07f, 0.09f, 0.11f), glm::vec3(0.30f, 0.76f, 0.88f));
+    if (build_mode.active) {
+        draw_pixel_text(window, 960, 28, "BUILD MODE", 2, glm::vec3(0.95f, 0.97f, 0.98f));
+        const RtsBuildingArchetype* archetype = world.findBuildingArchetype(build_mode.archetype_id);
+        const std::vector<std::uint32_t> builders =
+            selected_builder_ids(world, unit_visuals, snapshot_map);
+        const bool can_afford = archetype && world.canAffordCosts(0, archetype->cost);
+        std::string state_text = "MOVE CURSOR";
+        if (!builders.empty() && can_afford && build_mode.has_preview && build_mode.placement_valid) {
+            state_text = "READY TO PLACE";
+        } else if (builders.empty()) {
+            state_text = "SELECT A WORKER";
+        } else if (!can_afford) {
+            state_text = "NEED MORE ORE";
+        } else if (build_mode.has_preview) {
+            state_text = "PLACEMENT BLOCKED";
+        }
+        draw_pixel_text(window, 960, 58, std::string(build_mode.label), 3, glm::vec3(0.92f, 0.84f, 0.34f));
+        if (archetype && !archetype->cost.empty()) {
+            draw_pixel_text(window,
+                            960,
+                            96,
+                            "COST " + std::to_string(archetype->cost.front().amount) + " ORE",
+                            2,
+                            glm::vec3(0.88f, 0.91f, 0.95f));
+        }
+        draw_pixel_text(window,
+                        960,
+                        122,
+                        std::to_string(static_cast<int>(builders.size())) + " WORKERS READY",
+                        2,
+                        glm::vec3(0.80f, 0.90f, 0.96f));
+        draw_pixel_text(window, 960, 150, state_text, 2, glm::vec3(0.46f, 0.90f, 0.52f));
+    } else if (hovered_building.has_value()) {
+        const auto building_snapshot = world.getBuildingSnapshot(hovered_building.value());
+        if (building_snapshot.has_value()) {
+            draw_pixel_text(window,
+                            960,
+                            28,
+                            readable_building_label(building_snapshot->archetype_id),
+                            3,
+                            glm::vec3(0.95f, 0.97f, 0.98f));
+            draw_pixel_text(window,
+                            960,
+                            66,
+                            "TEAM " + team_label(building_snapshot->team),
+                            2,
+                            building_snapshot->team == 0 ? glm::vec3(0.68f, 0.88f, 1.0f)
+                                                         : glm::vec3(1.0f, 0.70f, 0.58f));
+            draw_pixel_text(window,
+                            960,
+                            92,
+                            "HP " + std::to_string(static_cast<int>(std::round(building_snapshot->health))) +
+                                "/" + std::to_string(static_cast<int>(std::round(building_snapshot->max_health))),
+                            2,
+                            glm::vec3(0.88f, 0.91f, 0.95f));
+            draw_pixel_text(window,
+                            960,
+                            118,
+                            building_snapshot->under_construction ? "UNDER CONSTRUCTION"
+                                                                  : "FULLY ONLINE",
+                            2,
+                            building_snapshot->under_construction ? glm::vec3(0.96f, 0.78f, 0.36f)
+                                                                  : glm::vec3(0.48f, 0.90f, 0.54f));
+            if (hovered_production && !hovered_production->queue.empty()) {
+                draw_pixel_text(window, 960, 146, "QUEUE", 2, glm::vec3(0.86f, 0.92f, 0.96f));
+                for (std::size_t i = 0; i < std::min<std::size_t>(hovered_production->queue.size(), 2); ++i) {
+                    const std::string entry_label =
+                        readable_unit_label(hovered_production->queue[i].unit_archetype_id);
+                    draw_pixel_text(window,
+                                    960,
+                                    164 + static_cast<int>(i) * 16,
+                                    std::to_string(static_cast<int>(i + 1)) + " " + entry_label,
+                                    1,
+                                    hovered_production->queue[i].active
+                                        ? glm::vec3(0.98f, 0.84f, 0.34f)
+                                        : glm::vec3(0.76f, 0.82f, 0.86f));
+                }
+            }
+        }
+    } else {
+        draw_pixel_text(window, 960, 28, "TACTICAL INFO", 2, glm::vec3(0.95f, 0.97f, 0.98f));
+        draw_pixel_text(window, 960, 66, "HOVER A BUILDING", 2, glm::vec3(0.80f, 0.88f, 0.92f));
+        draw_pixel_text(window, 960, 92, "FOR PRODUCTION", 2, glm::vec3(0.80f, 0.88f, 0.92f));
+        draw_pixel_text(window, 960, 132, "SHIFT RMB TO QUEUE", 2, glm::vec3(0.92f, 0.84f, 0.36f));
+        draw_pixel_text(window, 960, 158, "ORDERS", 2, glm::vec3(0.92f, 0.84f, 0.36f));
+    }
+
+    // bottom-left selection panel
+    draw_panel(window, 16, 536, 352, 168, glm::vec3(0.07f, 0.09f, 0.11f), glm::vec3(0.96f, 0.84f, 0.30f));
+    draw_pixel_text(window, 30, 548, "SELECTION", 2, glm::vec3(0.95f, 0.97f, 0.98f));
+    if (selected_ids.empty()) {
+        draw_pixel_text(window, 30, 582, "NO UNITS SELECTED", 2, glm::vec3(0.78f, 0.84f, 0.88f));
+        draw_pixel_text(window, 30, 612, "DRAG OR CLICK TO", 2, glm::vec3(0.78f, 0.84f, 0.88f));
+        draw_pixel_text(window, 30, 638, "FORM A SQUAD", 2, glm::vec3(0.78f, 0.84f, 0.88f));
+    } else {
+        draw_pixel_text(window,
+                        30,
+                        580,
+                        std::to_string(static_cast<int>(selected_ids.size())) + " UNITS",
+                        3,
+                        glm::vec3(0.97f, 0.90f, 0.36f));
+        draw_pixel_text(window,
+                        30,
+                        618,
+                        std::to_string(selected_workers) + " WORKERS  CARRY " + std::to_string(carried_total) + " ORE",
+                        2,
+                        glm::vec3(0.86f, 0.92f, 0.96f));
+        draw_labeled_meter(window,
+                           30,
+                           646,
+                           200,
+                           "AVG HP",
+                           std::to_string(static_cast<int>(std::round(average_health_ratio * 100.0f))),
+                           std::max(average_health_ratio, 0.02f),
+                           glm::vec3(0.34f, 0.84f, 0.42f),
+                           glm::vec3(0.14f, 0.18f, 0.14f));
+        for (std::size_t i = 0; i < std::min<std::size_t>(composition.size(), 3); ++i) {
+            draw_pixel_text(window,
+                            240,
+                            582 + static_cast<int>(i) * 22,
+                            std::to_string(composition[i].second) + " " + composition[i].first,
+                            2,
+                            glm::vec3(0.80f, 0.90f, 0.98f));
         }
     }
 
-    if (!selected_ids.empty()) {
-        // bottom mini panel gives a rough sense of army size worker count and carried ore among the current selection
-        draw_screen_rect(window, 16, 216, 274, 44, glm::vec3(0.06f, 0.08f, 0.10f));
-        draw_screen_rect(window,
-                         24,
-                         224,
-                         std::min(250, 16 + static_cast<int>(selected_ids.size()) * 24),
-                         10,
-                         glm::vec3(0.97f, 0.86f, 0.28f));
-        draw_screen_rect(window,
-                         24,
-                         240,
-                         std::min(250, 10 + selected_workers * 24 + carried_total * 3),
-                         10,
-                         glm::vec3(0.86f, 0.72f, 0.22f));
-    }
+    // bottom-center command legend
+    draw_panel(window, 392, 580, 484, 124, glm::vec3(0.07f, 0.09f, 0.11f), glm::vec3(0.34f, 0.72f, 0.95f));
+    draw_pixel_text(window, 408, 592, "TACTICAL CONTROLS", 2, glm::vec3(0.95f, 0.97f, 0.98f));
+    draw_pixel_text(window, 408, 620, "LMB SELECT   RMB COMMAND", 2, glm::vec3(0.84f, 0.90f, 0.94f));
+    draw_pixel_text(window, 408, 644, "SHIFT RMB QUEUE   A ATTACK MOVE", 2, glm::vec3(0.84f, 0.90f, 0.94f));
+    draw_pixel_text(window, 408, 668, "B FARM  N DEPOT  R CANCEL BUILD", 2, glm::vec3(0.84f, 0.90f, 0.94f));
+    draw_pixel_text(window, 408, 692, "Q WORKER  E INFANTRY  X DEMOLISH", 2, glm::vec3(0.84f, 0.90f, 0.94f));
+
+    draw_minimap_panel(window, 1042, 498, world, camera, unit_snapshots, unit_visuals);
 }
 
 void update_build_preview(SDL_Window* window,
                           const CameraState& camera,
                           const RtsWorld& world,
+                          const std::unordered_map<std::uint32_t, UnitVisualState>& visuals,
+                          const std::unordered_map<std::uint32_t, RtsWorldUnitSnapshot>& snapshots,
                           BuildModeState& build_mode) {
     build_mode.has_preview = false;
     build_mode.placement_valid = false;
@@ -1589,7 +2417,9 @@ void update_build_preview(SDL_Window* window,
                                                          archetype->placement.footprint_height);
     build_mode.has_preview = true;
     build_mode.placement_valid =
-        world.canPlaceBuildingFromArchetype(build_mode.archetype_id, build_mode.anchor);
+        world.canPlaceBuildingFromArchetype(build_mode.archetype_id, build_mode.anchor) &&
+        world.canAffordCosts(0, archetype->cost) &&
+        !selected_builder_ids(world, visuals, snapshots).empty();
 }
 }  // namespace
 
@@ -1678,7 +2508,7 @@ int main() {
 
     // controls are logged once because the on screen hud is intentionally graphical rather than text based
     LOG_INFO(get_logger(),
-             "RTS demo controls: LMB select, RMB move/attack/harvest/place, arrow keys pan, mouse wheel zoom, A arm attack-move, S stop, H hold, B/N build, Q queue worker at hovered depot, E queue infantry at hovered depot, X demolish hovered building");
+             "RTS demo controls: LMB select, RMB move/attack/repair/place, Shift+RMB queue, arrow keys pan, mouse wheel zoom, A arm attack-move, S stop, H hold, B/N build with workers, Q queue worker at hovered depot, E queue infantry at hovered depot, X demolish hovered building");
 
     using EngineClock = std::chrono::steady_clock;
     EngineClock::time_point previous_time = EngineClock::now();
@@ -1692,7 +2522,7 @@ int main() {
         previous_time = current_time;
 
         unit_snapshots = world.unitSnapshots();
-        const auto snapshot_map = snapshot_map_from_vector(unit_snapshots);
+        auto snapshot_map = snapshot_map_from_vector(unit_snapshots);
 
         SDL_Event event{};
         SDL_Window* window = sdl.windowAt(0);
@@ -1721,11 +2551,34 @@ int main() {
                     selection.current = selection.start;
                 } else if (event.button.button == SDL_BUTTON_RIGHT && window) {
                     // right click is the command verb of the demo
-                    // same button places buildings or issues harvest attack and move orders
-                    update_build_preview(window, camera, world, build_mode);
+                    // same button places buildings or issues harvest attack repair and move orders
+                    update_build_preview(window, camera, world, unit_visuals, snapshot_map, build_mode);
+                    const bool queue_commands = (SDL_GetModState() & KMOD_SHIFT) != 0;
+                    const std::vector<std::uint32_t> selected_ids =
+                        selected_unit_ids(unit_visuals, snapshot_map);
                     if (build_mode.active) {
                         if (build_mode.has_preview && build_mode.placement_valid) {
-                            world.placeBuildingFromArchetype(0, build_mode.archetype_id, build_mode.anchor);
+                            const std::vector<std::uint32_t> builder_ids =
+                                selected_builder_ids(world, unit_visuals, snapshot_map);
+                            for (const std::uint32_t builder_id : builder_ids) {
+                                const auto building_id =
+                                    world.startBuildingConstruction(0,
+                                                                    build_mode.archetype_id,
+                                                                    build_mode.anchor,
+                                                                    builder_id,
+                                                                    true);
+                                if (!building_id.has_value()) {
+                                    continue;
+                                }
+                                for (const std::uint32_t helper_id : builder_ids) {
+                                    if (helper_id != builder_id) {
+                                        world.issueRepairOrder(helper_id, building_id.value());
+                                    }
+                                }
+                                build_mode.active = false;
+                                build_mode.has_preview = false;
+                                break;
+                            }
                         }
                     } else {
                         const glm::mat4 projection = build_isometric_projection(window, camera.zoom);
@@ -1733,25 +2586,52 @@ int main() {
                         glm::vec3 hit_point(0.0f);
                         if (intersect_ground_from_cursor(window, view, projection,
                                                          event.button.x, event.button.y, hit_point)) {
-                            const std::vector<std::uint32_t> selected_ids =
-                                selected_unit_ids(unit_visuals, snapshot_map);
                             if (!selected_ids.empty()) {
+                                const auto hit_building_id =
+                                    building_id_at_hit(world.terrain(), world.buildings(), hit_point);
                                 const RtsWorldResourceNodeSnapshot* resource_node =
                                     find_resource_node_at_hit(world.resourceNodeSnapshots(), hit_point);
                                 const RtsWorldUnitSnapshot* attacked_unit =
                                     find_enemy_unit_at_hit(snapshot_map, hit_point);
+                                const auto hit_building = hit_building_id.has_value()
+                                                              ? world.getBuildingSnapshot(hit_building_id.value())
+                                                              : std::nullopt;
                                 if (resource_node) {
                                     // harvest gets sent to every selected unit and non workers will simply ignore it
                                     for (const std::uint32_t unit_id : selected_ids) {
-                                        world.issueHarvestOrder(unit_id, resource_node->node_id);
+                                        world.issueOrder(unit_id, RtsOrder{
+                                            RtsOrderType::harvest,
+                                            resource_node->center,
+                                            glm::vec3(0.0f),
+                                            0,
+                                            0.0f,
+                                            0.0f,
+                                            resource_node->node_id
+                                        }, queue_commands);
                                     }
+                                } else if (hit_building.has_value() && hit_building->team == 0 &&
+                                           (hit_building->under_construction ||
+                                            hit_building->health < hit_building->max_health)) {
+                                    for (const std::uint32_t unit_id : selected_ids) {
+                                        world.issueRepairOrder(unit_id,
+                                                               hit_building->building_id,
+                                                               queue_commands);
+                                    }
+                                } else if (hit_building.has_value() && hit_building->team != 0) {
+                                    world.issueFormationOrder(selected_ids,
+                                                              hit_building->center,
+                                                              RtsOrderType::attack_move,
+                                                              kFormationSpacing,
+                                                              queue_commands,
+                                                              0,
+                                                              hit_building->building_id);
                                 } else if (attacked_unit) {
                                     // targeting an enemy turns the command into a formation attack move with a concrete unit focus
                                     world.issueFormationOrder(selected_ids,
                                                               attacked_unit->position,
                                                               RtsOrderType::attack_move,
                                                               kFormationSpacing,
-                                                              false,
+                                                              queue_commands,
                                                               attacked_unit->unit_id);
                                 } else {
                                     // plain ground click becomes move unless the player previously armed attack move
@@ -1759,7 +2639,8 @@ int main() {
                                                               hit_point,
                                                               attack_move_armed ? RtsOrderType::attack_move
                                                                                 : RtsOrderType::move,
-                                                              kFormationSpacing);
+                                                              kFormationSpacing,
+                                                              queue_commands);
                                 }
                             }
                             attack_move_armed = false;
@@ -1811,6 +2692,8 @@ int main() {
                                 const std::vector<std::uint32_t> selected_ids =
                                     selected_unit_ids(unit_visuals, snapshot_map);
                                 if (!selected_ids.empty()) {
+                                    const auto attacked_building_id =
+                                        building_id_at_hit(world.terrain(), world.buildings(), hit_point);
                                     const RtsWorldUnitSnapshot* attacked_unit =
                                         find_enemy_unit_at_hit(snapshot_map, hit_point);
                                     if (attacked_unit) {
@@ -1820,6 +2703,23 @@ int main() {
                                                                   kFormationSpacing,
                                                                   false,
                                                                   attacked_unit->unit_id);
+                                    } else if (attacked_building_id.has_value()) {
+                                        const auto attacked_building =
+                                            world.getBuildingSnapshot(attacked_building_id.value());
+                                        if (attacked_building.has_value() && attacked_building->team != 0) {
+                                            world.issueFormationOrder(selected_ids,
+                                                                      attacked_building->center,
+                                                                      RtsOrderType::attack_move,
+                                                                      kFormationSpacing,
+                                                                      false,
+                                                                      0,
+                                                                      attacked_building->building_id);
+                                        } else {
+                                            world.issueFormationOrder(selected_ids,
+                                                                      hit_point,
+                                                                      RtsOrderType::attack_move,
+                                                                      kFormationSpacing);
+                                        }
                                     } else {
                                         world.issueFormationOrder(selected_ids,
                                                                   hit_point,
@@ -1911,10 +2811,11 @@ int main() {
         world.update(dt_seconds);
         update_hud_pulses(hud_pulses, world.events(), dt_seconds);
         unit_snapshots = world.unitSnapshots();
+        snapshot_map = snapshot_map_from_vector(unit_snapshots);
         // refresh all client side caches after simulation so rendering and selection use current state
         update_unit_visuals(unit_snapshots, unit_visuals, dt_seconds);
         sync_units_to_scene_graph(scene_graph, unit_snapshots, unit_visuals);
-        update_build_preview(window, camera, world, build_mode);
+        update_build_preview(window, camera, world, unit_visuals, snapshot_map, build_mode);
         if (window && !build_mode.active) {
             int mouse_x = 0;
             int mouse_y = 0;
@@ -1938,7 +2839,15 @@ int main() {
                      build_mode,
                      hovered_building);
         draw_selection_overlay(window, selection);
-        draw_hud_overlay(window, world, unit_snapshots, unit_visuals, hovered_building, hud_pulses);
+        draw_hud_overlay(window,
+                         world,
+                         camera,
+                         build_mode,
+                         attack_move_armed,
+                         unit_snapshots,
+                         unit_visuals,
+                         hovered_building,
+                         hud_pulses);
         sdl.updateWindows();
 
         // small sleep avoids spinning unnecessarily hard when frame pacing varies

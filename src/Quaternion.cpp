@@ -1,5 +1,7 @@
 #include "Quaternion.h"
 
+#include <algorithm>
+
 #include <glm/gtc/constants.hpp>
 
 namespace {
@@ -48,6 +50,12 @@ Quaternion::Quaternion(const glm::vec3& axis, float angle_radians) : quaternion_
     // Floating point math and fallback axes can still leave tiny drift
     // Normalize so the stored quaternion is unit length
     normalize();
+}
+
+Quaternion Quaternion::fromComponents(float x, float y, float z, float w) {
+    Quaternion quaternion(x, y, z, w);
+    quaternion.normalize();
+    return quaternion;
 }
 
 Quaternion::Quaternion(float x, float y, float z, float w)
@@ -119,6 +127,10 @@ Quaternion Quaternion::conjugate() const {
     return Quaternion(-quaternion_.x, -quaternion_.y, -quaternion_.z, quaternion_.w);
 }
 
+glm::vec4 Quaternion::components() const {
+    return quaternion_;
+}
+
 void Quaternion::normalize() {
     // Unit quaternions represent pure rotations
     // Re-normalizing prevents accumulated floating point error from slowly stretching the quaternion
@@ -132,4 +144,29 @@ void Quaternion::normalize() {
 
     // Divide each component by the 4D magnitude to get unit length
     quaternion_ /= magnitude;
+}
+
+Quaternion Quaternion::slerp(const Quaternion& from, const Quaternion& to, float t) {
+    const float clamped_t = std::clamp(t, 0.0f, 1.0f);
+
+    glm::vec4 start = from.quaternion_;
+    glm::vec4 end = to.quaternion_;
+    float cosine = glm::dot(start, end);
+
+    if (cosine < 0.0f) {
+        end = -end;
+        cosine = -cosine;
+    }
+
+    if (cosine > 0.9995f) {
+        const glm::vec4 blended = start + (end - start) * clamped_t;
+        return Quaternion::fromComponents(blended.x, blended.y, blended.z, blended.w);
+    }
+
+    const float theta_0 = std::acos(std::clamp(cosine, -1.0f, 1.0f));
+    const float theta = theta_0 * clamped_t;
+    const glm::vec4 orthogonal = glm::normalize(end - start * cosine);
+    const glm::vec4 blended =
+        start * std::cos(theta) + orthogonal * std::sin(theta);
+    return Quaternion::fromComponents(blended.x, blended.y, blended.z, blended.w);
 }

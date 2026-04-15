@@ -5,248 +5,116 @@ title: Architecture
 
 # Engine Architecture
 
-This page explains the engine as a set of connected subsystems rather than as isolated files
+This page describes the current engine as a set of connected subsystems.
 
-## 1. Entry Point And Startup
+## 1. Public Engine API
 
-The main executable starts in `src/main.cpp`
+`src/Engine.h` and `src/Engine.cpp` expose the gameplay-facing API.
 
-```cpp
-quill::Backend::start();
-quill::Frontend::create_or_get_logger("sdl", console_sink);
-SDL_Manager* sdl_ptr = nullptr;
-sdl_ptr = &SDL_Manager::sdl();
-initialize();
-```
+That API is intentionally narrow. It forwards into lower-level runtime storage for:
 
-Source: `src/main.cpp:879-899`
+- delta time
+- object creation and lookup
+- bounds
+- collision type registration
+- collision callback registration
+- skeletal rig assignment
+- animation clip assignment
+- animation playback
 
-This startup sequence establishes four things immediately
+## 2. Utility Runtime State
 
-- logging exists before the engine starts doing work
-- SDL is initialized through the singleton `SDL_Manager`
-- the user hook `initialize()` is called
-- the rest of the engine can assume there is a valid runtime environment
+`src/Utility.cpp` is the central runtime state layer.
 
-The user hook is intentionally tiny right now
+It owns:
 
-```cpp
-void initialize() {
-    // objective A boot hook for future scene setup
-}
-```
+- active `GameObject` instances
+- per-render-element bounds templates
+- the collision response table
+- the utility-owned collision broad phase
 
-Source: `src/AppLayer.cpp:6-8`
+Architecturally, this means the object update loop, animation playback, and collision dispatch all happen in one place.
 
-That means the current engine is still framework-first rather than gameplay-first
+## 3. Object System
 
-## 2. Public Engine API Layer
+`GameObject` is the abstract base type for managed objects.
 
-The public API is intentionally narrow and lives in `src/Engine.h` and `src/Engine.cpp`
+It owns:
 
-Its job is not to implement systems itself
+- world transform state
+- velocities
+- local bounds templates and world AABBs
+- collision type ids
+- animation playback state
+- current skin matrices
 
-Its job is to expose a clean API over the lower-level utility state and object storage
+`RtsUnit` is the concrete managed object used by the current engine-facing object API.
 
-Example
+## 4. Animation System
 
-```cpp
-std::uint64_t getDeltaTime() {
-    return utility::deltaTimeMs();
-}
+The animation stack has four major layers:
 
-float getDeltaSeconds() {
-    return utility::deltaSeconds();
-}
-```
+- `blender/meshbin.py`
+  Export skinned meshes and rig metadata.
+- `blender/animbin.py`
+  Export action clips.
+- `AnimationClip`
+  Store timestamps plus bone quaternions and sample them through SLERP.
+- `SkeletalRig`
+  Build skin matrices by forward kinematics.
 
-Source: `src/Engine.cpp:9-15`
+The runtime ownership split is important:
 
-And object spawning is just a thin wrapper over `RtsUnit` creation
+- `Shape` owns rest-pose mesh data and the `SkeletalRig`
+- `GameObject` owns playback state and current skin matrices
+- `Renderer3D` only consumes the final matrix array
 
-```cpp
-auto object = std::make_unique<RtsUnit>(render_element, position, linear_velocity, angular_velocity);
-return utility::addGameObject(std::move(object)) > 0;
-```
+## 5. Spatial Systems
 
-Source: `src/Engine.cpp:17-23`
+There are now two uses of `SceneGraph` in the codebase.
 
-So architecturally the `Engine` layer is a facade
+### Render-Side Scene Graph
 
-## 3. Runtime State Layer
+The main executable and demos use `SceneGraph` for:
 
-The real mutable runtime state lives in `src/Utility.cpp`
+- transform inheritance
+- BVH-backed view culling
+- world-space scene queries
 
-It stores
+### Collision Broad Phase
 
-- frame delta in milliseconds
-- frame delta in seconds
-- the vector of active `GameObject` instances
+The utility layer also owns a separate `SceneGraph` instance used strictly for collision broad phase.
 
-This is the central state bridge between the main loop and the simulation
+That collision graph is synchronized from `GameObject` AABBs each frame and queried through `queryAabb` before exact overlap checks run.
 
-The important consequence is that `src/main.cpp` calculates time, then the engine stores it once, and all later update code reads from the same source of truth
+## 6. Collision Dispatch
 
-## 4. Object System
+The collision pipeline has two distinct parts:
 
-The base type is `GameObject`
+1. spatial candidate generation through the utility-owned BVH
+2. event routing through a triangular type-pair table
 
-```cpp
-class GameObject {
-public:
-    virtual ~GameObject() = default;
-    virtual void update(float delta_seconds) = 0;
-    glm::mat4 getModel() const;
-```
+The response table stores one callback per unordered type pair and preserves the original registration order for callback arguments.
 
-Source: `src/GameObject.h`
+## 7. Rendering
 
-This defines the core object model
+Rendering is split across:
 
-- objects are polymorphic
-- each object advances itself per frame
-- each object can produce a model matrix for rendering
-
-The current concrete object is `RtsUnit`
-
-```cpp
-void RtsUnit::update(float delta_seconds) {
-    integrateVelocity(delta_seconds);
-    integrateAngularVelocity(delta_seconds);
-}
-```
-
-Source: `src/RtsUnit.cpp:11-14`
-
-So the current simulation model is intentionally simple
-
-- linear velocity updates position
-- angular velocity updates orientation
-
-## 5. Transform And Spatial Layer
-
-The file pair `src/SceneGraph.h` and `src/SceneGraph.cpp` is one of the most important architectural pieces
-
-It does two separate jobs
-
-1. parent-child transform propagation
-2. BVH-based spatial indexing
-
-The class comment explains the intent directly
-
-```cpp
- * 1. keep a parent-child transform tree so child nodes inherit parent motion
- * 2. build a bounding volume hierarchy over active object nodes for broad spatial queries
-```
-
-Source: `src/SceneGraph.h`
-
-This distinction matters
-
-- the transform tree answers "where is this object in world space after inheritance"
-- the BVH answers "which objects are worth testing or rendering in this region"
-
-The per-frame integration point is here
-
-```cpp
-scene_graph.setLocalTransformByObject(item.window_id,
-                                      getModelForRenderElement(item.window_id));
-scene_graph.updateWorldTransforms();
-scene_graph.rebuildSpatialIndex();
-```
-
-Source: `src/main.cpp:500-510`
-
-That three-step sequence is the center of the engine
-
-## 6. Rendering Layer
-
-Rendering is distributed across several files with very clear roles
-
-- `MeshDiscovery`
-  Finds candidate mesh files on disk
 - `MeshLoader`
-  Parses `.meshbin`
 - `Shape`
-  Owns CPU-side mesh arrays plus OpenGL VAO and VBO handles
 - `ShaderProgram`
-  Compiles and links GLSL
 - `Texture2D`
-  Loads BMP textures or creates a checker fallback
 - `Renderer3D`
-  Queues and submits draw commands
 
-The renderer itself is intentionally small
+For skinned meshes, `Renderer3D` uploads the current bone matrix array and `src/shaders/world.vert` performs the 4-weight skinning blend on the GPU.
 
-```cpp
-for (const RenderCommand& command : queue_) {
-    glBindVertexArray(command.shape->getVAO());
-    glUniformMatrix4fv(proj_uniform_loc_, 1, GL_FALSE, glm::value_ptr(command.projection));
-    glUniformMatrix4fv(view_uniform_loc_, 1, GL_FALSE, glm::value_ptr(command.view));
-    glUniformMatrix4fv(model_uniform_loc_, 1, GL_FALSE, glm::value_ptr(command.model));
-    glDrawArrays(GL_TRIANGLES, 0, command.shape->getVertexCount());
-}
-```
+## 8. Executables
 
-Source: `src/Renderer3D.cpp:69-88`
+The repository currently exposes three important entry points:
 
-So the renderer is queue-based, but still deliberately straightforward
-
-## 7. Window And Context Layer
-
-`src/SDL_Manager.cpp` owns SDL lifecycle and all OpenGL contexts
-
-Important design decisions
-
-- it is a singleton
-- each window gets its own OpenGL context
-- the first window acts like the main window for quitting
-
-Context creation happens here
-
-```cpp
-SDL_Window *window =
-    SDL_CreateWindow(title.c_str(), x, y, width, height, flags);
-SDL_GLContext context = SDL_GL_CreateContext(window);
-SDL_GL_MakeCurrent(window, context)
-```
-
-Source: `src/SDL_Manager.cpp:157-185`
-
-That design is what enables the multi-window mesh viewer in the main executable
-
-## 8. Audio Layer
-
-Audio uses SDL's callback model instead of a polling model
-
-The callback bridge is explicit
-
-```cpp
-void sound_callback(void* userdata, Uint8* stream, int len) {
-    auto* sound_system = static_cast<SoundSystem*>(userdata);
-    sound_system->mixToStream(stream, len);
-}
-```
-
-Source: `src/SoundSystem.cpp:22-28`
-
-Architecturally this means
-
-- sounds are preloaded or loaded on demand
-- playback requests are queued
-- the audio device thread pulls data through the callback
-
-## 9. Demo Layer
-
-The Doom-style demo in `demo/DoomDemo.cpp` is not a separate engine
-
-It is a concrete example of using the same core pieces
-
-- SDL window creation
-- renderer setup
-- `SceneGraph`
-- mesh loading
-- sound playback
-- gameplay state
-
-That is useful because it shows how the engine modules are expected to be composed by future game code
+- `src/main.cpp`
+  Multi-window mesh viewer and engine loop
+- `demo/RTSDemo.cpp`
+  RTS demo
+- `demo/DoomDemo.cpp`
+  Separate gameplay demo built on the same base systems

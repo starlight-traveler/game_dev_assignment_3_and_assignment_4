@@ -16,6 +16,69 @@ from bpy.props import StringProperty
 from bpy.types import Operator
 
 
+def _get_export_armature(obj):
+    # first look for an armature modifier because that is the normal skinning path
+    for modifier in obj.modifiers:
+        if modifier.type == 'ARMATURE' and modifier.object and modifier.object.type == 'ARMATURE':
+            return modifier.object
+
+    # parented meshes are also common in small rigs
+    if obj.parent and obj.parent.type == 'ARMATURE':
+        return obj.parent
+
+    return None
+
+
+def _build_bone_export_data(obj, armature_obj):
+    # preserve Blender's armature order so mesh weights and animation files align by index
+    armature_bones = list(armature_obj.data.bones)
+    bone_indices_by_name = {
+        bone.name: bone_index for bone_index, bone in enumerate(armature_bones)
+    }
+
+    mesh_from_world = obj.matrix_world.inverted()
+    exported_bones = []
+    for bone in armature_bones:
+        parent_index = bone_indices_by_name[bone.parent.name] if bone.parent else -1
+        world_head = armature_obj.matrix_world @ bone.head_local.to_4d()
+        mesh_local_head = mesh_from_world @ world_head
+        exported_bones.append((
+            int(parent_index),
+            float(mesh_local_head.x),
+            float(mesh_local_head.y),
+            float(mesh_local_head.z),
+        ))
+
+    return bone_indices_by_name, exported_bones
+
+
+def _vertex_bone_influences(obj, vertex, bone_indices_by_name, max_influences=4):
+    influences = []
+    for group in vertex.groups:
+        if group.group >= len(obj.vertex_groups):
+            continue
+
+        group_name = obj.vertex_groups[group.group].name
+        bone_index = bone_indices_by_name.get(group_name)
+        if bone_index is None or group.weight <= 0.0:
+            continue
+
+        influences.append((float(group.weight), float(bone_index)))
+
+    influences.sort(key=lambda entry: entry[0], reverse=True)
+    influences = influences[:max_influences]
+
+    bone_ids = [0.0] * max_influences
+    bone_weights = [0.0] * max_influences
+    total_weight = sum(weight for weight, _ in influences)
+    if total_weight > 1.0e-8:
+        for influence_index, (weight, bone_index) in enumerate(influences):
+            bone_ids[influence_index] = bone_index
+            bone_weights[influence_index] = weight / total_weight
+
+    return bone_ids, bone_weights
+
+
 def _get_export_object(context):
     # try active object first, if its mesh
     # Prefer active object if it's a mesh
@@ -39,6 +102,12 @@ def write_meshbin(context, filepath):
     if obj is None:
         raise RuntimeError("No mesh object selected/active to export.")
 
+    armature_obj = _get_export_armature(obj)
+    bone_indices_by_name = {}
+    exported_bones = []
+    if armature_obj is not None:
+        bone_indices_by_name, exported_bones = _build_bone_export_data(obj, armature_obj)
+
     # Evaluate modifiers so you export what you see
     depsgraph = context.evaluated_depsgraph_get()
     obj_eval = obj.evaluated_get(depsgraph)
@@ -57,6 +126,8 @@ def write_meshbin(context, filepath):
         positions = []
         normals = []
         uvs = []
+        bone_ids = []
+        bone_weights = []
         uv_layer = mesh_eval.uv_layers.active.data if mesh_eval.uv_layers.active else None
 
         # export in object space and keep per-loop uv where available
@@ -74,6 +145,13 @@ def write_meshbin(context, filepath):
                     uv = uv_layer[li].uv
                     uvs.extend((float(uv.x), float(uv.y)))
 
+                if armature_obj is not None:
+                    vertex = mesh_eval.vertices[vi]
+                    vertex_bone_ids, vertex_bone_weights = _vertex_bone_influences(
+                        obj, vertex, bone_indices_by_name)
+                    bone_ids.extend(vertex_bone_ids)
+                    bone_weights.extend(vertex_bone_weights)
+
             # Repeat triangle normal for each of the 3 vertices
             # this makes normals array same length as positions array / 3
             for _ in range(3):
@@ -82,20 +160,32 @@ def write_meshbin(context, filepath):
         # write v2 header: magic, version, triangle count, attribute count
         # then one uint32 component count per attribute and float payload blocks
         magic = 0x4D534842  # "MSHB"
-        version = 2
+        version = 3
         attr_components = [3, 3]
         if uv_layer:
             attr_components.append(2)
+        if armature_obj is not None:
+            attr_components.extend((4, 4))
+        flags = 1 if armature_obj is not None else 0
 
         with open(filepath, "wb") as f:
             f.write(struct.pack("<IIII", magic, version, tri_count, len(attr_components)))
             for comp in attr_components:
                 f.write(struct.pack("<I", comp))
+            f.write(struct.pack("<I", flags))
+
+            if armature_obj is not None:
+                f.write(struct.pack("<I", len(exported_bones)))
+                for parent_index, head_x, head_y, head_z in exported_bones:
+                    f.write(struct.pack("<ifff", parent_index, head_x, head_y, head_z))
 
             f.write(struct.pack("<{}f".format(len(positions)), *positions))
             f.write(struct.pack("<{}f".format(len(normals)), *normals))
             if uv_layer:
                 f.write(struct.pack("<{}f".format(len(uvs)), *uvs))
+            if armature_obj is not None:
+                f.write(struct.pack("<{}f".format(len(bone_ids)), *bone_ids))
+                f.write(struct.pack("<{}f".format(len(bone_weights)), *bone_weights))
 
     finally:
         # Always free the evaluated mesh

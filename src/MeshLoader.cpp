@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <fstream>
+#include <utility>
 #include <vector>
 
 #include "Shape.h"
@@ -12,6 +13,8 @@
 namespace {
 constexpr std::uint32_t kMeshHeaderMagic = 0x4D534842; // "MSHB"
 constexpr std::uint32_t kMeshHeaderVersion = 2;
+constexpr std::uint32_t kMeshHeaderVersionSkinned = 3;
+constexpr std::uint32_t kMeshHeaderFlagHasSkeletalRig = 1u << 0;
 
 /**
  * @brief Returns the logger used by mesh loading code
@@ -70,7 +73,9 @@ std::unique_ptr<Shape> load_header_mesh(std::ifstream& input, const std::string&
     input.read(reinterpret_cast<char*>(&version), sizeof(version));
     input.read(reinterpret_cast<char*>(&triangle_count), sizeof(triangle_count));
     input.read(reinterpret_cast<char*>(&attribute_count), sizeof(attribute_count));
-    if (!input || version != kMeshHeaderVersion || triangle_count == 0 || attribute_count == 0) {
+    if (!input ||
+        (version != kMeshHeaderVersion && version != kMeshHeaderVersionSkinned) ||
+        triangle_count == 0 || attribute_count == 0) {
         LOG_ERROR(get_logger(), "Mesh file '{}' has invalid v2 header", path);
         return nullptr;
     }
@@ -85,6 +90,42 @@ std::unique_ptr<Shape> load_header_mesh(std::ifstream& input, const std::string&
             return nullptr;
         }
         layout.attribute_components[i] = component_count;
+    }
+
+    std::shared_ptr<const SkeletalRig> skeletal_rig = nullptr;
+    if (version >= kMeshHeaderVersionSkinned) {
+        std::uint32_t flags = 0;
+        input.read(reinterpret_cast<char*>(&flags), sizeof(flags));
+        if (!input) {
+            LOG_ERROR(get_logger(), "Mesh file '{}' missing v3 flags", path);
+            return nullptr;
+        }
+
+        if ((flags & kMeshHeaderFlagHasSkeletalRig) != 0u) {
+            std::uint32_t bone_count = 0;
+            input.read(reinterpret_cast<char*>(&bone_count), sizeof(bone_count));
+            if (!input || bone_count == 0) {
+                LOG_ERROR(get_logger(), "Mesh file '{}' has invalid rig bone count", path);
+                return nullptr;
+            }
+
+            std::vector<SkeletalBone> bones;
+            bones.reserve(bone_count);
+            for (std::uint32_t bone_index = 0; bone_index < bone_count; ++bone_index) {
+                SkeletalBone bone{};
+                input.read(reinterpret_cast<char*>(&bone.parent_index), sizeof(bone.parent_index));
+                input.read(reinterpret_cast<char*>(&bone.bind_head.x), sizeof(bone.bind_head.x));
+                input.read(reinterpret_cast<char*>(&bone.bind_head.y), sizeof(bone.bind_head.y));
+                input.read(reinterpret_cast<char*>(&bone.bind_head.z), sizeof(bone.bind_head.z));
+                if (!input) {
+                    LOG_ERROR(get_logger(), "Mesh file '{}' has truncated rig metadata", path);
+                    return nullptr;
+                }
+                bones.push_back(bone);
+            }
+
+            skeletal_rig = std::make_shared<SkeletalRig>(std::move(bones));
+        }
     }
 
     std::size_t floats_per_vertex = 0;
@@ -102,7 +143,10 @@ std::unique_ptr<Shape> load_header_mesh(std::ifstream& input, const std::string&
                   path, expected_floats);
         return nullptr;
     }
-    return std::make_unique<Shape>(static_cast<std::size_t>(triangle_count), layout, vertex_data);
+    return std::make_unique<Shape>(static_cast<std::size_t>(triangle_count),
+                                   layout,
+                                   vertex_data,
+                                   std::move(skeletal_rig));
 }
 }  // namespace
 

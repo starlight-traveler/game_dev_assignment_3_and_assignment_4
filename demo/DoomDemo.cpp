@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -42,7 +43,7 @@ constexpr std::uint32_t kWallNorthObjectId = 1002;
 constexpr std::uint32_t kWallSouthObjectId = 1003;
 constexpr std::uint32_t kWallEastObjectId = 1004;
 constexpr std::uint32_t kWallWestObjectId = 1005;
-constexpr std::uint32_t kEnemyObjectId = 2001;
+constexpr std::uint32_t kFirstEnemyObjectId = 2001;
 
 // half-width of the square arena measured from world origin in X and Z
 constexpr float kArenaHalfExtent = 8.5f;
@@ -77,6 +78,8 @@ struct PlayerState {
  * @brief Runtime state for one enemy target
  */
 struct EnemyState {
+    // stable scene object id used by the scene graph and render metadata map
+    std::uint32_t object_id;
     // world-space enemy position
     glm::vec3 position;
     // current enemy health
@@ -85,7 +88,16 @@ struct EnemyState {
     float speed;
     // cooldown between enemy contact hits
     float attack_cooldown_s;
+    // tracks whether this enemy still has a live scene graph node
+    bool in_scene_graph;
 };
+
+std::vector<EnemyState> build_initial_enemies() {
+    // keep enemy setup in one list so adding another enemy later only needs another entry here
+    return {
+        EnemyState{kFirstEnemyObjectId, glm::vec3(0.0f, 0.0f, -4.0f), 100, 2.05f, 0.0f, false}
+    };
+}
 
 /**
  * @brief Renderable object metadata linked to BVH nodes
@@ -230,15 +242,15 @@ void clamp_player_to_arena(PlayerState& player) {
 }
 
 /**
- * @brief Solves ray-sphere intersection for hitscan weapons
+ * @brief Solves ray-sphere intersection distance for hitscan weapons
  * @param ray_origin Ray origin in world space
  * @param ray_dir Ray direction normalized
  * @param sphere_center Sphere center in world space
  * @param sphere_radius Sphere radius
- * @return True when the ray intersects the sphere in front of origin
+ * @return Nearest hit distance when the ray intersects in front of origin
  */
-bool ray_hits_sphere(const glm::vec3& ray_origin, const glm::vec3& ray_dir,
-                     const glm::vec3& sphere_center, float sphere_radius) {
+std::optional<float> ray_hit_distance_sphere(const glm::vec3& ray_origin, const glm::vec3& ray_dir,
+                                             const glm::vec3& sphere_center, float sphere_radius) {
     // vector from sphere center to ray origin
     const glm::vec3 to_center = ray_origin - sphere_center;
     // quadratic coefficient for the linear term after simplifying with normalized ray direction
@@ -249,14 +261,20 @@ bool ray_hits_sphere(const glm::vec3& ray_origin, const glm::vec3& ray_dir,
     const float discriminant = b * b - c;
     if (discriminant < 0.0f) {
         // negative discriminant means no real intersection
-        return false;
+        return std::nullopt;
     }
     // solve both intersection distances along the ray
     const float sqrt_disc = std::sqrt(discriminant);
     const float t_near = -b - sqrt_disc;
     const float t_far = -b + sqrt_disc;
-    // an intersection counts if either solution is in front of the camera
-    return t_near >= 0.0f || t_far >= 0.0f;
+    // pick the nearest positive hit distance so multiple enemies can be resolved front to back
+    if (t_near >= 0.0f) {
+        return t_near;
+    }
+    if (t_far >= 0.0f) {
+        return t_far;
+    }
+    return std::nullopt;
 }
 
 /**
@@ -304,11 +322,11 @@ void draw_crosshair(SDL_Window* window) {
  * @brief Writes current gameplay health values to window title
  * @param window Window handle
  * @param player Player runtime state
- * @param enemy Enemy runtime state
+ * @param enemies Enemy runtime states
  * @param has_won Win flag
  * @param has_lost Lose flag
  */
-void update_window_title(SDL_Window* window, const PlayerState& player, const EnemyState& enemy,
+void update_window_title(SDL_Window* window, const PlayerState& player, const std::vector<EnemyState>& enemies,
                          bool has_won, bool has_lost) {
     // no title can be changed if the window is gone
     if (!window) {
@@ -323,11 +341,21 @@ void update_window_title(SDL_Window* window, const PlayerState& player, const En
         status = "Defeat";
     }
 
+    int total_enemy_health = 0;
+    int alive_enemy_count = 0;
+    for (const EnemyState& enemy : enemies) {
+        total_enemy_health += std::max(enemy.health, 0);
+        if (enemy.health > 0) {
+            ++alive_enemy_count;
+        }
+    }
+
     // show the current state and basic controls in the title bar
     const std::string title =
         "DOOM Demo | State: " + status +
         " | Player HP: " + std::to_string(player.health) +
-        " | Enemy HP: " + std::to_string(std::max(enemy.health, 0)) +
+        " | Enemies: " + std::to_string(alive_enemy_count) +
+        " | Enemy HP: " + std::to_string(total_enemy_health) +
         " | WASD move, mouse look, LMB/Space shoot";
     SDL_SetWindowTitle(window, title.c_str());
 }
@@ -523,8 +551,8 @@ int main() {
     });
     // pick a monkey mesh for the enemy and fall back to the box if it is missing
     const std::string enemy_mesh_path = find_first_existing_path({
-        (std::filesystem::path("blender") / "monkey.meshbin").string(),
-        (std::filesystem::path("..") / "blender" / "monkey.meshbin").string(),
+        (std::filesystem::path("blender") / "suzz.meshbin").string(),
+        (std::filesystem::path("..") / "blender" / "suzz.meshbin").string(),
         box_mesh_path
     });
     // upload the world and enemy meshes to GPU-backed Shape objects
@@ -579,6 +607,9 @@ int main() {
         LOG_WARNING(get_logger(), "Failed to load hit sound '{}'", hit_wav);
     }
 
+    // keep enemy setup in one list so future enemies only need another entry with a fresh object id
+    std::vector<EnemyState> enemies = build_initial_enemies();
+
     // scene graph stores transform hierarchy plus the BVH used for broad culling
     SceneGraph scene_graph{};
     // leaf size is small because the demo only has a handful of objects
@@ -587,7 +618,7 @@ int main() {
     // map object ids to render metadata so the render queue can turn ids into draw calls
     std::unordered_map<std::uint32_t, RenderableObject> world_objects{};
     // reserve a little extra space to avoid a rehash during setup
-    world_objects.reserve(8);
+    world_objects.reserve(5 + enemies.size());
     // register the floor using the shared box mesh
     world_objects.emplace(kFloorObjectId, RenderableObject{
         box_mesh.get(), box_mesh->hasAttribute(2), &floor_renderer});
@@ -603,9 +634,11 @@ int main() {
     // register the west wall
     world_objects.emplace(kWallWestObjectId, RenderableObject{
         box_mesh.get(), box_mesh->hasAttribute(2), &wall_renderer});
-    // register the enemy mesh
-    world_objects.emplace(kEnemyObjectId, RenderableObject{
-        enemy_mesh.get(), enemy_mesh->hasAttribute(2), &renderer});
+    // register one renderable entry for each enemy object id
+    for (const EnemyState& enemy : enemies) {
+        world_objects.emplace(enemy.object_id, RenderableObject{
+            enemy_mesh.get(), enemy_mesh->hasAttribute(2), &renderer});
+    }
 
     // floor transform places a thin box slightly below the origin and scales it into the arena floor
     const glm::mat4 floor_model =
@@ -652,23 +685,16 @@ int main() {
     // player can fire immediately
     player.shot_cooldown_s = 0.0f;
 
-    // initialize the single enemy state
-    EnemyState enemy{};
-    // spawn the enemy near the opposite side of the room
-    enemy.position = glm::vec3(0.0f, 0.0f, -4.0f);
-    // full enemy health
-    enemy.health = 100;
-    // chase speed
-    enemy.speed = 2.05f;
-    // enemy can attack immediately if close enough
-    enemy.attack_cooldown_s = 0.0f;
-
-    // add the enemy as a dynamic scene object with a scaled model matrix
-    scene_graph.createNode(
-        scene_graph.rootNodeId(),
-        kEnemyObjectId,
-        glm::translate(glm::mat4(1.0f), enemy.position) * glm::scale(glm::mat4(1.0f), glm::vec3(0.85f)),
-        kEnemyRadius);
+    // add each enemy as a dynamic scene object with a scaled model matrix
+    for (EnemyState& enemy : enemies) {
+        scene_graph.createNode(
+            scene_graph.rootNodeId(),
+            enemy.object_id,
+            glm::translate(glm::mat4(1.0f), enemy.position) *
+                glm::scale(glm::mat4(1.0f), glm::vec3(0.85f)),
+            kEnemyRadius);
+        enemy.in_scene_graph = true;
+    }
 
     // these flags drive the game loop and title text
     bool has_won = false;
@@ -747,8 +773,10 @@ int main() {
 
         // apply keyboard movement after event processing
         update_player_movement(player, dt_seconds);
-        // update enemy chase and melee logic
-        update_enemy_logic(enemy, player, dt_seconds, has_won, has_lost);
+        // update every enemy using the same chase and melee behavior
+        for (EnemyState& enemy : enemies) {
+            update_enemy_logic(enemy, player, dt_seconds, has_won, has_lost);
+        }
 
         // tick the player weapon cooldown down toward zero
         if (player.shot_cooldown_s > 0.0f) {
@@ -765,11 +793,27 @@ int main() {
             const glm::vec3 eye = player.position + glm::vec3(0.0f, 0.9f, 0.0f);
             // use the current view direction as the shot direction
             const glm::vec3 dir = camera_forward(player.yaw_deg, player.pitch_deg);
-            // test the enemy hit sphere only if the enemy is still alive
-            if (enemy.health > 0 && ray_hits_sphere(eye, dir, enemy.position + glm::vec3(0.0f, 0.75f, 0.0f),
-                                                    kEnemyRadius)) {
-                // subtract damage but never go below zero
-                enemy.health = std::max(0, enemy.health - 25);
+            EnemyState* hit_enemy = nullptr;
+            float nearest_hit_distance = std::numeric_limits<float>::max();
+            for (EnemyState& enemy : enemies) {
+                if (enemy.health <= 0) {
+                    continue;
+                }
+                const std::optional<float> hit_distance =
+                    ray_hit_distance_sphere(eye,
+                                            dir,
+                                            enemy.position + glm::vec3(0.0f, 0.75f, 0.0f),
+                                            kEnemyRadius);
+                if (!hit_distance.has_value() || hit_distance.value() >= nearest_hit_distance) {
+                    continue;
+                }
+                nearest_hit_distance = hit_distance.value();
+                hit_enemy = &enemy;
+            }
+
+            // apply damage only to the nearest living enemy hit by the ray
+            if (hit_enemy) {
+                hit_enemy->health = std::max(0, hit_enemy->health - 25);
                 if (hit_sound_index >= 0) {
                     // play a hit confirmation sound when the ray connects
                     sound_system.playSound(hit_sound_index);
@@ -781,27 +825,38 @@ int main() {
         // clear the one-frame fire request after evaluating it
         fire_requested = false;
 
-        if (enemy.health <= 0 && !has_won) {
-            // mark the win state only once
+        for (EnemyState& enemy : enemies) {
+            if (enemy.health <= 0 && enemy.in_scene_graph) {
+                // dead enemies are removed once from the spatial structure so they stop rendering and culling
+                scene_graph.removeNodeByObject(enemy.object_id);
+                enemy.in_scene_graph = false;
+            }
+        }
+
+        const bool all_enemies_dead =
+            std::all_of(enemies.begin(), enemies.end(),
+                        [](const EnemyState& enemy) { return enemy.health <= 0; });
+        if (all_enemies_dead && !has_won) {
+            // mark the win state only once after every enemy is down
             has_won = true;
-            // remove the enemy from the spatial structure so it stops rendering
-            scene_graph.removeNodeByObject(kEnemyObjectId);
         }
         if (player.health <= 0 && !has_lost) {
             // player death transitions the demo into the lose state
             has_lost = true;
         }
 
-        if (enemy.health > 0) {
-            // rebuild the enemy model matrix from current position and facing direction
-            const glm::mat4 enemy_model =
-                glm::translate(glm::mat4(1.0f), enemy.position) *
-                glm::rotate(glm::mat4(1.0f), std::atan2(player.position.x - enemy.position.x,
-                                                        player.position.z - enemy.position.z),
-                            glm::vec3(0.0f, 1.0f, 0.0f)) *
-                glm::scale(glm::mat4(1.0f), glm::vec3(0.85f));
-            // push the new enemy transform into the scene structure
-            scene_graph.setLocalTransformByObject(kEnemyObjectId, enemy_model);
+        for (const EnemyState& enemy : enemies) {
+            if (enemy.health > 0 && enemy.in_scene_graph) {
+                // rebuild each enemy model matrix from current position and facing direction
+                const glm::mat4 enemy_model =
+                    glm::translate(glm::mat4(1.0f), enemy.position) *
+                    glm::rotate(glm::mat4(1.0f), std::atan2(player.position.x - enemy.position.x,
+                                                            player.position.z - enemy.position.z),
+                                glm::vec3(0.0f, 1.0f, 0.0f)) *
+                    glm::scale(glm::mat4(1.0f), glm::vec3(0.85f));
+                // push the new enemy transform into the scene structure
+                scene_graph.setLocalTransformByObject(enemy.object_id, enemy_model);
+            }
         }
 
         // propagate parent-child transforms through the hierarchy
@@ -854,7 +909,7 @@ int main() {
         // draw the simple 2D crosshair overlay
         draw_crosshair(window);
         // update the window title with current health and match state
-        update_window_title(window, player, enemy, has_won, has_lost);
+        update_window_title(window, player, enemies, has_won, has_lost);
 
         // swap the back buffer to the screen
         sdl.updateWindows();

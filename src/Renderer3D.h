@@ -28,17 +28,21 @@ class Shape;
  */
 struct RenderCommand {
     // mesh geometry to draw
-    const Shape* shape;
+    const Shape* shape = nullptr;
     // local-to-world transform for this object
-    glm::mat4 model;
+    glm::mat4 model = glm::mat4(1.0f);
     // camera transform shared by the current frame or window
-    glm::mat4 view;
+    glm::mat4 view = glm::mat4(1.0f);
     // projection transform for the current viewport
-    glm::mat4 projection;
+    glm::mat4 projection = glm::mat4(1.0f);
     // world-space light position used by the fragment shader
-    glm::vec3 light_position;
+    glm::vec3 light_position = glm::vec3(0.0f);
     // whether this mesh should use authored UVs or shader-generated fallback UVs
-    bool use_mesh_uv;
+    bool use_mesh_uv = false;
+    // whether this mesh should be skinned by bone matrices in the vertex shader
+    bool use_skinning = false;
+    // skinning matrices for the current pose
+    std::vector<glm::mat4> bone_matrices;
 };
 
 /**
@@ -117,6 +121,8 @@ private:
     GLint light_uniform_loc_;
     GLint texture_uniform_loc_;
     GLint use_mesh_uv_uniform_loc_;
+    GLint use_skinning_uniform_loc_;
+    GLint bone_matrices_uniform_loc_;
     // queued draw commands collected during the current frame
     std::vector<RenderCommand> queue_;
 };

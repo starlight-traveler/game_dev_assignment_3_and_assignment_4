@@ -32,8 +32,8 @@ void RtsUnit::update(float delta_seconds) {
         if (distance_to_target <= arrival_radius_) {
             // if the target is already within the snap radius finish immediately
             // snapping avoids tiny jitter from taking many nearly zero sized steps at the end
-            position_ = move_target_;
-            linear_velocity_ = glm::vec3(0.0f);
+            setPosition(move_target_);
+            setLinearVelocity(glm::vec3(0.0f));
             has_move_target_ = false;
             return;
         }
@@ -49,14 +49,14 @@ void RtsUnit::update(float delta_seconds) {
         const float max_step = move_speed_ * delta_seconds;
         if (max_step >= distance_to_target) {
             // if this frame could overshoot clamp to the exact target instead
-            position_ = move_target_;
-            linear_velocity_ = glm::vec3(0.0f);
+            setPosition(move_target_);
+            setLinearVelocity(glm::vec3(0.0f));
             has_move_target_ = false;
             return;
         }
 
         // otherwise advance by one speed limited step and let the next frame continue
-        linear_velocity_ = direction * move_speed_;
+        setLinearVelocity(direction * move_speed_);
         integrateVelocity(delta_seconds);
         return;
     }
@@ -78,15 +78,15 @@ bool RtsUnit::issueMoveCommand(const glm::vec3& target_position,
     move_speed_ = move_speed;
     arrival_radius_ = std::max(arrival_radius, kMinArrivalRadius);
     // move commands take over orientation so angular velocity is cleared
-    angular_velocity_ = glm::vec3(0.0f);
+    setAngularVelocity(glm::vec3(0.0f));
 
     const glm::vec3 to_target = move_target_ - position_;
     const float distance_to_target = glm::length(to_target);
     if (distance_to_target <= arrival_radius_) {
         // commands issued very near the target resolve instantly
         // that keeps click spam near the current position from creating fake movement frames
-        position_ = move_target_;
-        linear_velocity_ = glm::vec3(0.0f);
+        setPosition(move_target_);
+        setLinearVelocity(glm::vec3(0.0f));
         has_move_target_ = false;
         return true;
     }
@@ -101,8 +101,8 @@ bool RtsUnit::stopMoveCommand() {
     // stopping clears both linear and angular motion so the unit fully settles
     // unlike the full rts world there is no order queue here so stop just drops the one active command
     has_move_target_ = false;
-    linear_velocity_ = glm::vec3(0.0f);
-    angular_velocity_ = glm::vec3(0.0f);
+    setLinearVelocity(glm::vec3(0.0f));
+    setAngularVelocity(glm::vec3(0.0f));
     return true;
 }
 
@@ -119,5 +119,5 @@ void RtsUnit::faceDirection(const glm::vec3& direction) {
 
     // local plus x is treated as the forward axis for this unit mesh
     const float yaw_radians = std::atan2(-direction.z, direction.x);
-    rotation_ = Quaternion(glm::vec3(0.0f, 1.0f, 0.0f), yaw_radians);
+    setRotation(Quaternion(glm::vec3(0.0f, 1.0f, 0.0f), yaw_radians));
 }

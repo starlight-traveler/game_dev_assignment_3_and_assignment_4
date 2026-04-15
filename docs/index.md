@@ -3,112 +3,55 @@ layout: default
 title: Home
 ---
 
-# Assignment 2 Engine Guide
+# Assignment 3 Guide
 
-This documentation set replaces the older assignment-1 site and describes the engine exactly as it exists in the current codebase
+This site now documents the parts of the repository that matter for Game Dev 3 Assignment 3: collisions, event-driven interactions, kinematic integration, and the animation/controller work that feeds the simulation stage.
 
-The current project is a small C++ game engine skeleton aimed at RTS-style engine goals with two visible entry points
+## Assignment Status
 
-- `src/main.cpp` runs the multi-window mesh viewer and engine loop
-- `demo/DoomDemo.cpp` runs a small gameplay demo built on the same rendering and spatial systems
+- Objective A: implemented
+- Objective B: implemented
+- Objective C: implemented
+- Objective D: not implemented in the current branch
+- Objective E: documented and demonstrated through the runtime path plus tests
 
-Suggested reading order
+## Recommended Reading Order
 
-1. [Architecture](./architecture.html)
-2. [Runtime Flow](./runtime-flow.html)
-3. [Module Reference](./module-reference.html)
-4. [Mathematics](./mathematics.html)
-5. [Design Tradeoffs](./design-tradeoffs.html)
-6. [Objective B Report](./objective-b-report.html)
-7. [Objective C Rendering Guide](./objective-c-guide.html)
-8. [Objective E Scene Graph Guide](./objective-e-guide.html)
-9. [Doom Demo Walkthrough](./demo-guide.html)
+1. [Objective A Guide](./objective-a-guide.html)
+2. [Objective B Report](./objective-b-report.html)
+3. [Animation Controller Flowchart](./animation-controller-flow.html)
+4. [Objective C Guide](./objective-c-guide.html)
+5. [Collision Pipeline Flowchart](./collision-pipeline-flow.html)
+6. [Objective D Status](./objective-d-guide.html)
+7. [Objective E Guide](./objective-e-guide.html)
+8. [Mathematics](./mathematics.html)
+9. [Architecture](./architecture.html)
+10. [Runtime Flow](./runtime-flow.html)
 
-## What The Engine Currently Does
-
-At a high level, the engine already supports
-
-- frame delta tracking
-- an engine-facing `GameObject` API
-- velocity and angular-velocity updates
-- a custom quaternion rotation class
-- mesh discovery and mesh loading from `.meshbin`
-- OpenGL rendering with VAO and VBO management
-- texture and shader setup
-- multi-window SDL plus OpenGL context management
-- event-driven audio playback through an SDL callback mixer
-- a transform hierarchy with BVH-based spatial queries
-- a grid-based terrain data model with movement/buildability properties
-- building footprint placement and occupancy rules
-
-## The Single Most Important Idea
-
-The codebase is easiest to understand with this data flow in mind
+## Assignment 3 Runtime Shape
 
 ```text
-SDL window + input
-    -> Engine frame delta
-    -> GameObject updates
-    -> model matrices
-    -> SceneGraph world transforms
-    -> BVH rebuild
-    -> render queue
-    -> OpenGL draw calls
+update time
+  -> update managed GameObjects
+  -> integrate motion / refresh AABBs
+  -> update animation playback / skin matrices
+  -> synchronize BVH-backed broad phase
+  -> exact AABB overlap tests
+  -> invoke user collision callbacks
+  -> render current frame
 ```
 
-That exact flow is visible in `src/main.cpp`
+## Main Code Locations
 
-```cpp
-updateActiveGameObjects();
-sync_scene_graph_with_objects(render_items, scene_graph);
-render_all_windows(sdl, elapsed_seconds, clear_color, scene_graph, render_items);
-sdl.updateWindows();
-```
-
-Source: `src/main.cpp:1064-1071`
-
-## Project Layout
-
-The most important folders are
-
-- `src/`
-  The engine code and the main executable
-- `demo/`
-  The gameplay demo built on the engine
-- `tests/`
-  Objective tests for object math and the scene structure
-- `tools/`
-  Small benchmark support code
-- `blender/`
-  Mesh assets and the helper script that produced `.meshbin` files
-
-## Recommended Reading Strategy
-
-Presentation order
-
-1. `src/main.cpp`
-2. `src/Engine.cpp`
-3. `src/GameObject.cpp`
-4. `src/SceneGraph.cpp`
-5. `src/Renderer3D.cpp`
-6. `src/MeshLoader.cpp` and `src/Shape.cpp`
-7. `src/SoundSystem.cpp`
-8. `demo/DoomDemo.cpp`
-
-That order mirrors how data moves during execution
-
-## Current Scope And Missing Systems
-
-This is an engine skeleton, not a complete RTS engine yet
-
-It does **not** currently include
-
-- pathfinding
-- unit selection
-- command issuing
-- full terrain rendering or terrain-aware pathfinding
-- physics resolution
-- animation blending
-- networking
-
-What it does include is the mathematical and architectural base those systems would build on
+- `src/Integration.h`
+  Objective A helper math for linear and angular integration.
+- `src/GameObject.cpp`
+  Object state mutation, animation playback, and automatic AABB refresh.
+- `src/Utility.cpp`
+  Simulation-stage broad phase, triangular callback table, and deferred dispatch.
+- `src/SceneGraph.cpp`
+  BVH-backed spatial graph used by both render queries and the collision broad phase.
+- `tests/ObjectiveA_test.cpp`
+- `tests/ObjectiveBC_test.cpp`
+- `tests/ObjectiveE_test.cpp`
+  Current verification coverage for the Assignment 3 implementation.

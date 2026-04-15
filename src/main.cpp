@@ -23,6 +23,7 @@
 #include "quill/LogMacros.h"
 #include "quill/sinks/ConsoleSink.h"
 
+#include "AnimationLoader.h"
 #include "Engine.h"
 #include "MeshDiscovery.h"
 #include "MeshLoader.h"
@@ -62,6 +63,8 @@ struct RenderItem {
     std::string mesh_path;
     // pointer to Shape that owns vao/vbo
     std::unique_ptr<Shape> mesh;
+    // optional animation clip paired with the currently loaded mesh
+    std::shared_ptr<const AnimationClip> animation_clip;
     // class-based renderer for queue/bind/draw flow
     std::unique_ptr<Renderer3D> renderer;
     // per window camera, so each window can move independantly
@@ -165,6 +168,41 @@ std::string find_first_existing_path(const std::vector<std::string>& candidates)
         }
     }
     return {};
+}
+
+/**
+ * @brief Loads the animation sidecar that matches a skinned mesh file
+ * @param mesh Loaded mesh pointer
+ * @param mesh_path Source mesh path
+ * @return Shared animation clip pointer or nullptr when unavailable
+ */
+std::shared_ptr<const AnimationClip> load_animation_for_mesh(const Shape* mesh,
+                                                             const std::string& mesh_path) {
+    if (!mesh || !mesh->hasSkinningData()) {
+        return nullptr;
+    }
+
+    std::filesystem::path animation_path(mesh_path);
+    animation_path.replace_extension(".animbin");
+    if (!std::filesystem::exists(animation_path)) {
+        return nullptr;
+    }
+
+    return load_animation_from_animbin(animation_path.string());
+}
+
+/**
+ * @brief Pushes mesh rig and clip state from one render item into its managed object
+ * @param item Render item whose object should be updated
+ */
+void sync_render_item_animation_state(const RenderItem& item) {
+    const std::shared_ptr<const SkeletalRig> skeletal_rig =
+        item.mesh ? item.mesh->skeletalRig() : std::shared_ptr<const SkeletalRig>{};
+    setSkeletalRigForRenderElement(item.window_id, skeletal_rig);
+    setAnimationClipForRenderElement(item.window_id, item.animation_clip);
+    if (skeletal_rig && item.animation_clip) {
+        playAnimationForRenderElement(item.window_id, true, true);
+    }
 }
 
 /**
@@ -574,6 +612,7 @@ void destroy_render_item_for_window(SDL_Manager& sdl, std::vector<RenderItem>& r
     it->renderer.reset();
     // remove game object tied to this render element id
     destroyGameObject(window_id);
+    clearLocalBoundsForRenderElement(window_id);
     // remove node from BVH spatial structure
     scene_graph.removeNodeByObject(window_id);
 
@@ -603,7 +642,16 @@ bool reload_mesh_for_item(SDL_Manager& sdl, RenderItem& item) {
 
     // swap in loaded mesh while this window context is current
     item.mesh = std::move(mesh);
+    item.animation_clip = load_animation_for_mesh(item.mesh.get(), item.mesh_path);
     item.mode = RenderItem::ScreenMode::mesh;
+    if (item.mesh && item.mesh->hasLocalBounds()) {
+        setLocalBoundsForRenderElement(item.window_id,
+                                       item.mesh->localBoundsMin(),
+                                       item.mesh->localBoundsMax());
+    } else {
+        clearLocalBoundsForRenderElement(item.window_id);
+    }
+    sync_render_item_animation_state(item);
     return true;
 }
 
@@ -798,6 +846,9 @@ void render_all_windows(SDL_Manager& sdl, float elapsed_seconds, Uint32 clear_co
                 command.projection = proj;
                 command.light_position = light_pos;
                 command.use_mesh_uv = item.mesh->hasAttribute(2);
+                command.bone_matrices = getSkinMatricesForRenderElement(item.window_id);
+                command.use_skinning =
+                    item.mesh->hasSkinningData() && !command.bone_matrices.empty();
                 item.renderer->enqueue(command);
                 item.renderer->drawQueue();
             } else {
@@ -848,6 +899,7 @@ RenderItem make_render_item_for_window(SDL_Manager& sdl, const std::string& mesh
     SDL_Window* window = sdl.windowAt(window_index);
     item.window_id = window ? SDL_GetWindowID(window) : 0;
     item.mesh_path = mesh_path;
+    item.animation_clip = nullptr;
     item.renderer = nullptr;
     // basic camera defaults so mesh is visible
     item.camera.position = glm::vec3(2.5f, 2.5f, 2.5f);
@@ -879,6 +931,14 @@ RenderItem make_render_item_for_window(SDL_Manager& sdl, const std::string& mesh
         LOG_WARNING(get_logger(), "mesh load failed for '{}'", mesh_path);
     }
     item.mesh = std::move(mesh);
+    item.animation_clip = load_animation_for_mesh(item.mesh.get(), item.mesh_path);
+    if (item.mesh && item.mesh->hasLocalBounds()) {
+        setLocalBoundsForRenderElement(item.window_id,
+                                       item.mesh->localBoundsMin(),
+                                       item.mesh->localBoundsMax());
+    } else {
+        clearLocalBoundsForRenderElement(item.window_id);
+    }
 
     // initialize class-based renderer with shader files and optional BMP
     auto renderer = std::make_unique<Renderer3D>();
@@ -1010,6 +1070,7 @@ int main(int argc, char** argv) {
         const glm::vec3 angular_velocity(0.0f, glm::radians(40.0f), 0.0f);
         if (spawnRtsGameObject(render_items[i].window_id, spawn_position,
                                linear_velocity, angular_velocity)) {
+            sync_render_item_animation_state(render_items[i]);
             scene_graph.createNode(scene_graph.rootNodeId(),
                                    render_items[i].window_id,
                                    getModelForRenderElement(render_items[i].window_id),

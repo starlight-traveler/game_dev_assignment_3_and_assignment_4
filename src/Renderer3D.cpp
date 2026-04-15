@@ -1,10 +1,15 @@
 #include "Renderer3D.h"
 
+#include <algorithm>
 #include <utility>
 
 #include <glm/gtc/type_ptr.hpp>
 
 #include "Shape.h"
+
+namespace {
+constexpr GLsizei kMaxSkinningBones = 128;
+}  // namespace
 
 // Construct an empty renderer object
 // GPU resources are not loaded here so the type can be created before shader or texture paths are known
@@ -17,6 +22,8 @@ Renderer3D::Renderer3D()
       light_uniform_loc_(-1),
       texture_uniform_loc_(-1),
       use_mesh_uv_uniform_loc_(-1),
+      use_skinning_uniform_loc_(-1),
+      bone_matrices_uniform_loc_(-1),
       queue_() {}
 
 bool Renderer3D::initialize(const std::string& vertex_shader_path,
@@ -42,6 +49,8 @@ bool Renderer3D::initialize(const std::string& vertex_shader_path,
     light_uniform_loc_ = shader_.uniformLocation("light_pos");
     texture_uniform_loc_ = shader_.uniformLocation("base_tex");
     use_mesh_uv_uniform_loc_ = shader_.uniformLocation("use_mesh_uv");
+    use_skinning_uniform_loc_ = shader_.uniformLocation("use_skinning");
+    bone_matrices_uniform_loc_ = shader_.uniformLocation("bone_matrices[0]");
     return true;
 }
 
@@ -117,6 +126,20 @@ void Renderer3D::drawQueue() {
         if (use_mesh_uv_uniform_loc_ >= 0) {
             // This flag lets the shader branch between authored UVs and generated fallback UVs
             glUniform1i(use_mesh_uv_uniform_loc_, command.use_mesh_uv ? 1 : 0);
+        }
+        const bool do_skinning =
+            command.use_skinning && !command.bone_matrices.empty();
+        if (use_skinning_uniform_loc_ >= 0) {
+            glUniform1i(use_skinning_uniform_loc_, do_skinning ? 1 : 0);
+        }
+        if (do_skinning && bone_matrices_uniform_loc_ >= 0) {
+            const GLsizei matrix_count = static_cast<GLsizei>(
+                std::min<std::size_t>(command.bone_matrices.size(),
+                                      static_cast<std::size_t>(kMaxSkinningBones)));
+            glUniformMatrix4fv(bone_matrices_uniform_loc_,
+                               matrix_count,
+                               GL_FALSE,
+                               glm::value_ptr(command.bone_matrices[0]));
         }
 
         // Submit one non-indexed triangle draw using the vertex count stored by Shape

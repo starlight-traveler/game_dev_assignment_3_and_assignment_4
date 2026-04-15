@@ -9,6 +9,10 @@
 #include <cstdint>
 #include <memory>
 
+#include <glm/glm.hpp>
+
+#include "CollisionResponse.h"
+
 class GameObject;
 
 namespace utility {
@@ -46,7 +50,7 @@ std::size_t addGameObject(std::unique_ptr<GameObject> object);
 bool removeGameObjectByRenderElement(std::uint32_t render_element);
 
 /**
- * @brief Updates all active game objects
+ * @brief Updates all active game objects and runs BVH-backed broad-phase collision dispatch
  * @param delta_seconds Delta time in seconds
  */
 void updateGameObjects(float delta_seconds);
@@ -69,6 +73,52 @@ const GameObject* findGameObjectByRenderElement(std::uint32_t render_element);
  * @return Mutable pointer to matching object or nullptr
  */
 GameObject* findMutableGameObjectByRenderElement(std::uint32_t render_element);
+
+/**
+ * @brief Stores a local-space bounds template for a render element id
+ * @param render_element Render element id
+ * @param min_bounds Minimum local-space corner
+ * @param max_bounds Maximum local-space corner
+ * @return True when the template was accepted
+ */
+bool setLocalBoundsByRenderElement(std::uint32_t render_element,
+                                   const glm::vec3& min_bounds,
+                                   const glm::vec3& max_bounds);
+
+/**
+ * @brief Clears any local-space bounds template for a render element id
+ * @param render_element Render element id
+ * @return True when a template or active object bounds were cleared
+ */
+bool clearLocalBoundsByRenderElement(std::uint32_t render_element);
+
+/**
+ * @brief Returns the built-in collision type id used by RTS units
+ * @return RTS collision type id
+ */
+std::uint32_t rtsCollisionType();
+
+/**
+ * @brief Registers a new collision type id for callback routing
+ * @return Newly allocated collision type id
+ */
+std::uint32_t registerCollisionType();
+
+/**
+ * @brief Registers one callback for collisions between two type ids
+ * @param type_a First collision type id
+ * @param type_b Second collision type id
+ * @param response Callback to invoke on overlap
+ * @return True when the callback was stored in the triangular collision table
+ */
+bool registerCollisionResponse(std::uint32_t type_a,
+                               std::uint32_t type_b,
+                               CollisionResponse response);
+
+/**
+ * @brief Clears all registered collision response callbacks
+ */
+void clearCollisionResponses();
 }  // namespace utility
 
 #endif

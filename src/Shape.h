@@ -1,12 +1,16 @@
 #ifndef SHAPE_H
 #define SHAPE_H
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <GL/glew.h>
 #include <glm/glm.hpp>
+
+#include "SkeletalRig.h"
 
 /**
  * @brief says how many float components belong to each vertex attribute
@@ -40,7 +44,8 @@ public:
      * so vertex count is triangle count times 3
      */
     Shape(std::size_t triangleCount, const MeshAttributeLayout& layout,
-          const std::vector<float>& vertexData);
+          const std::vector<float>& vertexData,
+          std::shared_ptr<const SkeletalRig> skeletal_rig = nullptr);
 
     /**
      * @brief frees the vao and vbo owned by this shape
@@ -69,6 +74,36 @@ public:
      */
     bool hasAttribute(std::size_t attributeIndex) const;
 
+    /**
+     * @brief Reports whether this shape has valid skinning data
+     * @return True when a rig plus bone attributes are present
+     */
+    bool hasSkinningData() const;
+
+    /**
+     * @brief Reports whether this shape has valid CPU-side bounds data
+     * @return True when local bounds can be queried
+     */
+    bool hasLocalBounds() const;
+
+    /**
+     * @brief Returns the minimum local-space corner of the mesh bounds
+     * @return Minimum corner
+     */
+    glm::vec3 localBoundsMin() const;
+
+    /**
+     * @brief Returns the maximum local-space corner of the mesh bounds
+     * @return Maximum corner
+     */
+    glm::vec3 localBoundsMax() const;
+
+    /**
+     * @brief Returns the optional rig bound to this mesh
+     * @return Shared rig pointer or nullptr when unskinned
+     */
+    std::shared_ptr<const SkeletalRig> skeletalRig() const;
+
 private:
     // cpu side copy of positions useful for debugging or later cpu side mesh work
     std::vector<glm::vec3> pos_; // cpu copy of positions
@@ -81,6 +116,11 @@ private:
     std::size_t triangle_count_; // used for draw count
     // number of float components for each attribute slot
     std::vector<std::uint32_t> attribute_components_;
+    std::shared_ptr<const SkeletalRig> skeletal_rig_;
+    // cached local-space bounds for future broad-phase collision work
+    glm::vec3 local_bounds_min_;
+    glm::vec3 local_bounds_max_;
+    bool has_local_bounds_;
 };
 
 #endif

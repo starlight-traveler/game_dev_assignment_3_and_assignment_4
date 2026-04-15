@@ -8,15 +8,14 @@ std::vector<std::string> discover_meshbins(const std::string& folder_arg,
   // list of paths we will return
   std::vector<std::string> paths;
 
-  // scan only one folder level for now (fast + simple)
-  // if folder is valid, just grab every .meshbin in it
+  // if folder is valid, walk the tree and grab every .meshbin under it
   if (!folder_arg.empty()) {
     // wrap input string in filesystem path so we can query it
     const std::filesystem::path input_path(folder_arg);
     std::error_code ec;
     if (std::filesystem::is_directory(input_path, ec) && !ec) {
-      // directory exists, iterate entries
-      for (const auto& entry : std::filesystem::directory_iterator(input_path, ec)) {
+      // directory exists, recurse so nested asset folders work too
+      for (const auto& entry : std::filesystem::recursive_directory_iterator(input_path, ec)) {
         if (ec) {
           // error while iterating, break out
           break;

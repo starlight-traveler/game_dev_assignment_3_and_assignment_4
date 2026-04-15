@@ -7,8 +7,8 @@
 // helper for cli arg folder scan logic
 // keeping it in a small file so it can be unit tested easy
 /**
- * @brief returns all .meshbin files in a folder, or fallback path when none found
- * @param folder_arg folder to scan, empty means skip scan
+ * @brief returns all .meshbin files in a folder tree, or fallback path when none found
+ * @param folder_arg root folder to scan recursively, empty means skip scan
  * @param fallback_mesh_path path used when scan yields nothing
  * @return sorted list of mesh paths
  */

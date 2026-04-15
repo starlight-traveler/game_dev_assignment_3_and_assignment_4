@@ -381,6 +381,8 @@ std::optional<std::uint32_t> RtsWorld::placeBuildingFromArchetype(int team,
         return std::nullopt;
     }
 
+    // placing an already finished building skips the worker construction loop entirely
+    // this path is mostly for setup code tests and instant placement behaviors
     owned_buildings_[building_id.value()] = OwnedBuildingState{
         building_id.value(),
         team,
@@ -408,6 +410,7 @@ std::optional<std::uint32_t> RtsWorld::placeBuildingFromArchetype(int team,
     });
 
     if (archetype->registers_tower) {
+        // completed tower buildings register their autonomous combat behavior right away
         addTower(building_id.value(),
                  building_id.value(),
                  team,
@@ -510,6 +513,7 @@ std::optional<std::uint32_t> RtsWorld::startBuildingConstruction(
         return std::nullopt;
     }
 
+    // reserve the footprint immediately so nothing else can path through or build on the site while it is unfinished
     const std::optional<std::uint32_t> building_id =
         buildings_.placeBuilding(terrain_, archetype->placement, anchor);
     if (!building_id.has_value()) {
@@ -525,6 +529,7 @@ std::optional<std::uint32_t> RtsWorld::startBuildingConstruction(
             ? archetype->max_health
             : std::max(kMinBuildingHealth,
                        archetype->max_health * kConstructionStartHealthRatio);
+    // unfinished buildings still get some health so they can exist as attackable world objects during construction
     owned_buildings_[building_id.value()] = OwnedBuildingState{
         building_id.value(),
         team,
@@ -582,6 +587,7 @@ std::optional<std::uint32_t> RtsWorld::startBuildingConstruction(
             0,
             building_id.value()
         })) {
+        // if the worker cannot actually accept the construct order undo the whole placement
         cancelBuildingConstruction(building_id.value(), spend_resources);
         return std::nullopt;
     }
@@ -596,6 +602,7 @@ bool RtsWorld::cancelBuildingConstruction(std::uint32_t building_id, bool refund
     }
 
     const glm::vec3 center = buildingCenter(*building_instance);
+    // clear any workers that were still pointing at this site so they do not keep a dangling target id
     for (auto& entry : units_) {
         UnitState& unit = entry.second;
         if (unit.active_order.has_value() &&
@@ -1228,6 +1235,7 @@ bool RtsWorld::issueOrder(std::uint32_t unit_id,
     unit->holding_position = false;
     if (!queue_when_busy) {
         // replace the current command immediately
+        // this is the common rts behavior for a fresh right click command
         unit->order_queue.clear();
         unit->active_order = sanitized;
         clearUnitMotion(*unit);
@@ -1236,12 +1244,14 @@ bool RtsWorld::issueOrder(std::uint32_t unit_id,
 
     if (!unit->active_order.has_value()) {
         // in queue mode start right away if the active slot is free
+        // queueing only matters when something is already running
         unit->active_order = sanitized;
         clearUnitMotion(*unit);
         return true;
     }
 
     // otherwise append behind the current work
+    // the unit will not see this order until pullNextQueuedOrder promotes it later
     unit->order_queue.push_back(sanitized);
     return true;
 }
@@ -1251,7 +1261,8 @@ bool RtsWorld::issueFormationOrder(const std::vector<std::uint32_t>& unit_ids,
                                    RtsOrderType order_type,
                                    float spacing,
                                    bool queue_when_busy,
-                                   std::uint32_t target_unit_id) {
+                                   std::uint32_t target_unit_id,
+                                   std::uint32_t target_building_id) {
     std::vector<UnitState*> ordered_units{};
     ordered_units.reserve(unit_ids.size());
     for (const std::uint32_t unit_id : unit_ids) {
@@ -1313,7 +1324,9 @@ bool RtsWorld::issueFormationOrder(const std::vector<std::uint32_t>& unit_ids,
             glm::vec3(0.0f),
             target_unit_id,
             unit.move_speed,
-            unit.radius + 0.08f
+            unit.radius + 0.08f,
+            0,
+            target_building_id
         }, queue_when_busy);
     }
     return any_accepted;
@@ -1338,12 +1351,13 @@ void RtsWorld::update(float delta_seconds) {
     }
 
     // one simulation tick roughly does
-    // refresh timers and vision
-    // update projectiles and towers
-    // apply ai commands
-    // advance production
-    // run unit order state machines
-    // cleanup deaths and emit match end events
+    // clear last frame events and refresh fog
+    // decay unit timers
+    // resolve projectile and tower combat
+    // ask ai for commands
+    // advance production queues
+    // run each units order state machine
+    // cleanup dead entities and then check win state
     combat_events_.clear();
     updateFogOfWar();
     for (auto& entry : units_) {
@@ -1358,6 +1372,7 @@ void RtsWorld::update(float delta_seconds) {
     }
 
     // projectile logic resolves through callbacks into the current world state
+    // combat itself stays decoupled and asks the world to translate ids into live targets
     combat_.updateProjectiles(
         delta_seconds,
         [this](const RtsCombatSystem::ProjectileState& projectile)
@@ -1522,6 +1537,7 @@ void RtsWorld::update(float delta_seconds) {
         },
         combat_events_);
     // ai works from snapshots so it cannot directly mutate the world while deciding
+    // once it returns commands we replay them through the same helpers the player code uses
     const std::vector<RtsAiCommand> ai_commands = ai_.update(
         delta_seconds,
         RtsAiFrame{
@@ -1614,6 +1630,7 @@ void RtsWorld::update(float delta_seconds) {
         }
 
         // active_order behaves like a small per unit state machine
+        // each branch decides whether the order finished stalled or should keep running next frame
         updateActiveOrder(unit, delta_seconds);
     }
 
@@ -1690,6 +1707,7 @@ bool RtsWorld::assignPath(UnitState& unit,
     }
 
     // skip the first point because it is the units current cell center
+    // movement only needs future waypoints beyond where the unit already stands
     unit.path_points.clear();
     unit.path_index = 0;
     for (std::size_t i = 1; i < world_path.size(); ++i) {
@@ -1732,6 +1750,7 @@ bool RtsWorld::moveUnitToward(UnitState& unit,
     }
 
     // rebuild whenever the desired goal cell changed or the existing path is exhausted
+    // repeated frames toward the same goal can therefore keep reusing the cached path
     if (!unit.has_goal_cell ||
         desired_goal.x != unit.goal_cell.x ||
         desired_goal.y != unit.goal_cell.y ||
@@ -1761,6 +1780,7 @@ bool RtsWorld::moveUnitToward(UnitState& unit,
 
         const float terrain_cost = std::max(terrain_.movementCost(current_cell), 0.5f);
         // terrain cost slows the effective distance the unit can move this frame
+        // roads feel faster because their cost is smaller while forests and rough ground feel slower
         const float max_step = (move_speed / terrain_cost) * delta_seconds;
         if (max_step >= distance_to_waypoint) {
             // if we can fully reach the waypoint this frame snap exactly onto it
@@ -1798,6 +1818,7 @@ bool RtsWorld::tryAttackUnit(UnitState& attacker, const UnitState& target) {
     }
 
     // attacking means spawning a projectile and starting cooldown not applying instant damage here
+    // health is actually removed later when projectile impact is resolved
     if (!combat_.spawnProjectile(attacker.unit_id,
                                  target.unit_id,
                                  0,
@@ -1934,6 +1955,7 @@ bool RtsWorld::handleHarvestOrder(UnitState& unit, RtsOrder& order, float delta_
     if (unit.carried_resource_amount >= archetype->carry_capacity &&
         !unit.carried_resource_id.empty()) {
         // once full the worker temporarily switches from harvesting to deposit behavior
+        // this is still the same harvest order not a separate queued return order
         const std::optional<std::uint32_t> dropoff_id =
             findNearestFriendlyDropoffBuilding(unit.team, unit.position);
         if (!dropoff_id.has_value()) {
@@ -1969,6 +1991,7 @@ bool RtsWorld::handleHarvestOrder(UnitState& unit, RtsOrder& order, float delta_
         });
         unit.carried_resource_amount = 0;
         unit.carried_resource_id.clear();
+        // leaving the order active makes the worker loop back to the node automatically
         return false;
     }
 
@@ -1981,6 +2004,7 @@ bool RtsWorld::handleHarvestOrder(UnitState& unit, RtsOrder& order, float delta_
     }
 
     // otherwise move to the resource node and harvest when in range
+    // harvest therefore alternates travel gather travel deposit until canceled or the node disappears
     const glm::vec3 node_position = terrain_.cellCenter(node->cell);
     if (!moveUnitToward(unit, node_position, unit.move_speed, unit.radius + 0.15f, delta_seconds)) {
         return false;
@@ -2031,6 +2055,7 @@ bool RtsWorld::handleConstructOrder(UnitState& unit, RtsOrder& order, float delt
     }
 
     // construction progresses only while the builder stays inside interaction range
+    // that makes the worker physically commit to the job instead of building from anywhere
     const glm::vec3 center = buildingCenter(*building_instance);
     const float interaction_radius =
         std::max(order.arrival_radius, unit.radius + buildingInteractionRadius(*building_instance));
@@ -2046,6 +2071,7 @@ bool RtsWorld::handleConstructOrder(UnitState& unit, RtsOrder& order, float delt
         return true;
     }
 
+    // build progress is normalized so all buildings share the same zero to one completion rule
     building->build_progress =
         std::min(1.0f, building->build_progress + delta_seconds / building->build_time);
     // health rises with construction progress so unfinished buildings are still damageable
@@ -2058,6 +2084,7 @@ bool RtsWorld::handleConstructOrder(UnitState& unit, RtsOrder& order, float delt
         return true;
     }
 
+    // once at the site the worker mostly stands in place while the timer advances
     clearUnitMotion(unit);
     return false;
 }
@@ -2090,6 +2117,7 @@ bool RtsWorld::handleRepairOrder(UnitState& unit, RtsOrder& order, float delta_s
     }
 
     // repair is continuous and may emit repeated building_repaired events across many frames
+    // unlike construction it only restores health and never changes completion state
     const float previous_health = building->health;
     building->health = std::min(building->max_health,
                                 building->health + building->repair_rate * delta_seconds);
@@ -2180,6 +2208,7 @@ void RtsWorld::pullNextQueuedOrder(UnitState& unit) {
     }
 
     // queued orders only start once the active slot becomes free
+    // units never execute two independent orders at the same time
     unit.active_order = unit.order_queue.front();
     unit.order_queue.pop_front();
     clearUnitMotion(unit);
@@ -2197,6 +2226,7 @@ void RtsWorld::updateActiveOrder(UnitState& unit, float delta_seconds) {
     const float arrival_radius = std::max(order.arrival_radius, kMinArrivalRadius);
 
     // helper lambdas keep the switch cases focused on order logic rather than attack details
+    // multiple order types reuse the same chase until in range then stop and fire pattern
     auto engage_enemy = [&](const UnitState& enemy) {
         // tryAttackUnit returns false only when we are out of range or could not spawn the projectile
         if (!tryAttackUnit(unit, enemy)) {
@@ -2235,6 +2265,7 @@ void RtsWorld::updateActiveOrder(UnitState& unit, float delta_seconds) {
 
     case RtsOrderType::attack_move: {
         // attack move tries explicit focus targets first then nearby aggro targets then resumes marching
+        // this makes explicit enemy clicks feel sticky while still allowing general self defense
         if (order.target_unit_id != 0) {
             const UnitState* focus_target = findUnit(order.target_unit_id);
             if (focus_target && focus_target->team != unit.team && focus_target->health > 0.0f) {
@@ -2255,6 +2286,7 @@ void RtsWorld::updateActiveOrder(UnitState& unit, float delta_seconds) {
         }
 
         // once there is no explicit focus target fall back to nearby aggro targets
+        // after combat interrupts it the unit resumes marching toward the original destination
         const std::optional<std::uint32_t> enemy_id =
             findNearestEnemyUnit(unit.team, unit.position, unit.aggro_range);
         if (enemy_id.has_value()) {
@@ -2311,6 +2343,7 @@ void RtsWorld::updateActiveOrder(UnitState& unit, float delta_seconds) {
 
     case RtsOrderType::guard: {
         // guard follows a friendly unit loosely and engages threats around that friendly
+        // the guarded unit acts like the center of the defenders awareness bubble
         const UnitState* guarded_unit = findUnit(order.target_unit_id);
         if (!guarded_unit || guarded_unit->team != unit.team) {
             unit.active_order = std::nullopt;
@@ -2405,6 +2438,7 @@ bool RtsWorld::spawnProducedUnit(std::uint32_t building_id,
     }
 
     // spawn near the building center then nudge to the nearest traversable cell
+    // this avoids producing units inside blocked building footprint cells
     GridCoord spawn_origin_cell{};
     glm::vec3 spawn_origin = buildingCenter(*building_instance);
     if (!terrain_.worldToCell(spawn_origin, spawn_origin_cell)) {
@@ -2434,6 +2468,7 @@ bool RtsWorld::spawnProducedUnit(std::uint32_t building_id,
 
     if (planar_distance(spawn_position, spawn_target) > 0.1f) {
         // produced units immediately inherit the buildings rally point as a move order
+        // rally points are just ordinary move orders so they reuse normal pathing and arrival logic
         issueOrder(unit_id, RtsOrder{
             RtsOrderType::move,
             spawn_target,
@@ -2513,6 +2548,7 @@ void RtsWorld::finishBuildingConstruction(OwnedBuildingState& building) {
     }
 
     // finishing construction activates production and optional tower behavior for this building
+    // until this moment incomplete structures do not provide supply production or tower fire
     building.under_construction = false;
     building.build_progress = 1.0f;
     building.health = building.max_health;

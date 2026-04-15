@@ -47,6 +47,16 @@ public:
     Quaternion(const glm::vec3& axis, float angle_radians);
 
     /**
+     * @brief Constructs directly from quaternion components and normalizes the result
+     * @param x X component
+     * @param y Y component
+     * @param z Z component
+     * @param w W component
+     * @return Quaternion built from those components
+     */
+    static Quaternion fromComponents(float x, float y, float z, float w);
+
+    /**
      * @brief Multiplies two quaternions with the Hamilton product
      * @param rhs Right-hand quaternion
      * @return Result quaternion
@@ -82,12 +92,27 @@ public:
     Quaternion conjugate() const;
 
     /**
+     * @brief Returns the raw quaternion components as x y z w
+     * @return Underlying component vector
+     */
+    glm::vec4 components() const;
+
+    /**
      * @brief Normalizes this quaternion to unit length
      *
      * Re-normalization is important after repeated floating point operations
      * so the quaternion continues to represent a stable pure rotation
      */
     void normalize();
+
+    /**
+     * @brief Spherically interpolates between two quaternions
+     * @param from Start rotation
+     * @param to End rotation
+     * @param t Blend factor on [0, 1]
+     * @return Interpolated unit quaternion
+     */
+    static Quaternion slerp(const Quaternion& from, const Quaternion& to, float t);
 
 private:
     /**

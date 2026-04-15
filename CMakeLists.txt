@@ -180,6 +180,21 @@ target_include_directories(objective_b_benchmark PRIVATE
 )
 
 if (BUILD_TESTING)
+    add_executable(objective_a_test
+        tests/ObjectiveA_test.cpp
+        src/Engine.cpp
+        src/GameObject.cpp
+        src/Quaternion.cpp
+        src/RtsUnit.cpp
+        src/SceneGraph.cpp
+        src/Utility.cpp
+    )
+    target_include_directories(objective_a_test PRIVATE
+        src
+        ${GLM_INCLUDE_DIR}
+    )
+    add_test(NAME objective_a_test COMMAND objective_a_test)
+
     # test exe for objective b quaternion and game object behavior
     add_executable(objective_b_test
         tests/ObjectiveB_test.cpp
@@ -187,6 +202,7 @@ if (BUILD_TESTING)
         src/GameObject.cpp
         src/Quaternion.cpp
         src/RtsUnit.cpp
+        src/SceneGraph.cpp
         src/Utility.cpp
     )
     target_include_directories(objective_b_test PRIVATE
@@ -195,6 +211,21 @@ if (BUILD_TESTING)
     )
     # register test with ctest
     add_test(NAME objective_b_test COMMAND objective_b_test)
+
+    add_executable(objective_bc_test
+        tests/ObjectiveBC_test.cpp
+        src/Engine.cpp
+        src/GameObject.cpp
+        src/Quaternion.cpp
+        src/RtsUnit.cpp
+        src/SceneGraph.cpp
+        src/Utility.cpp
+    )
+    target_include_directories(objective_bc_test PRIVATE
+        src
+        ${GLM_INCLUDE_DIR}
+    )
+    add_test(NAME objective_bc_test COMMAND objective_bc_test)
 
     add_executable(objective_e_test
         tests/ObjectiveE_test.cpp
