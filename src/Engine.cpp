@@ -171,6 +171,15 @@ bool clearLocalBoundsForRenderElement(std::uint32_t render_element) {
     return utility::clearLocalBoundsByRenderElement(render_element);
 }
 
+bool setConvexHullForRenderElement(std::uint32_t render_element,
+                                   const std::vector<glm::vec3>& points) {
+    return utility::setLocalConvexHullByRenderElement(render_element, points);
+}
+
+bool clearConvexHullForRenderElement(std::uint32_t render_element) {
+    return utility::clearLocalConvexHullByRenderElement(render_element);
+}
+
 bool hasAabbForRenderElement(std::uint32_t render_element) {
     const GameObject* object = utility::findGameObjectByRenderElement(render_element);
     return object ? object->hasAabb() : false;
@@ -190,6 +199,13 @@ glm::vec3 getAabbMaxForRenderElement(std::uint32_t render_element) {
         return glm::vec3(0.0f);
     }
     return object->getAabbMax();
+}
+
+ConvexCollisionQueryResult queryConvexCollisionBetweenRenderElements(
+    std::uint32_t first_render_element,
+    std::uint32_t second_render_element) {
+    return utility::queryConvexCollisionByRenderElement(first_render_element,
+                                                        second_render_element);
 }
 
 std::uint32_t getRtsGameObjectCollisionType() {

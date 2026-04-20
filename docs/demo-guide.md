@@ -13,7 +13,7 @@ It is a concrete composition of the same core systems
 
 ## 1. What The Demo Adds
 
-Compared with the mesh viewer in `src/main.cpp`, the demo adds
+Compared with the `assignment_1` showcase in `src/main.cpp`, the demo adds
 
 - first-person camera control
 - player health

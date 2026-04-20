@@ -170,6 +170,17 @@ public:
     void clearLocalBounds();
 
     /**
+     * @brief Replaces the explicit local convex support point set
+     * @param points Local-space support points
+     */
+    void setLocalConvexHull(const std::vector<glm::vec3>& points);
+
+    /**
+     * @brief Clears any explicit local convex support point set
+     */
+    void clearLocalConvexHull();
+
+    /**
      * @brief Reports whether a valid world AABB is available
      * @return True when bounds have been configured
      */
@@ -186,6 +197,19 @@ public:
      * @return Maximum corner
      */
     glm::vec3 getAabbMax() const;
+
+    /**
+     * @brief Reports whether this object can answer convex support queries
+     * @return True when explicit hull data exists or local bounds can be treated as a box
+     */
+    bool hasConvexHull() const;
+
+    /**
+     * @brief Returns the farthest world-space point in a direction
+     * @param direction World-space search direction
+     * @return Farthest world-space support point
+     */
+    glm::vec3 supportPointWorld(const glm::vec3& direction) const;
 
     /**
      * @brief Returns the collision type id used by the event table
@@ -282,6 +306,7 @@ private:
     void refreshAabb();
 
     std::array<glm::vec3, 8> local_bounds_corners_;
+    std::vector<glm::vec3> local_convex_hull_points_;
     glm::vec3 aabb_min_;
     glm::vec3 aabb_max_;
     bool has_local_bounds_;

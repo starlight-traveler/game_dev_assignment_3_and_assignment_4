@@ -18,6 +18,7 @@ GameObject::GameObject(std::uint32_t render_element,
       linear_velocity_(linear_velocity),
       angular_velocity_(angular_velocity),
       local_bounds_corners_{},
+      local_convex_hull_points_(),
       aabb_min_(0.0f),
       aabb_max_(0.0f),
       has_local_bounds_(false),
@@ -144,6 +145,14 @@ void GameObject::clearLocalBounds() {
     aabb_max_ = glm::vec3(0.0f);
 }
 
+void GameObject::setLocalConvexHull(const std::vector<glm::vec3>& points) {
+    local_convex_hull_points_ = points;
+}
+
+void GameObject::clearLocalConvexHull() {
+    local_convex_hull_points_.clear();
+}
+
 bool GameObject::hasAabb() const {
     return has_world_aabb_;
 }
@@ -154,6 +163,44 @@ glm::vec3 GameObject::getAabbMin() const {
 
 glm::vec3 GameObject::getAabbMax() const {
     return aabb_max_;
+}
+
+bool GameObject::hasConvexHull() const {
+    return !local_convex_hull_points_.empty() || has_local_bounds_;
+}
+
+glm::vec3 GameObject::supportPointWorld(const glm::vec3& direction) const {
+    const std::vector<glm::vec3>* explicit_points =
+        local_convex_hull_points_.empty() ? nullptr : &local_convex_hull_points_;
+    if (!explicit_points && !has_local_bounds_) {
+        return position_;
+    }
+
+    const glm::vec3 local_direction = rotation_.conjugate() * direction;
+    glm::vec3 best_local_point = explicit_points ? (*explicit_points)[0] : local_bounds_corners_[0];
+    float best_projection = explicit_points
+                                ? glm::dot(best_local_point, local_direction)
+                                : glm::dot(local_bounds_corners_[0], local_direction);
+
+    if (explicit_points) {
+        for (std::size_t i = 1; i < explicit_points->size(); ++i) {
+            const float projection = glm::dot((*explicit_points)[i], local_direction);
+            if (projection > best_projection) {
+                best_projection = projection;
+                best_local_point = (*explicit_points)[i];
+            }
+        }
+    } else {
+        for (std::size_t i = 1; i < local_bounds_corners_.size(); ++i) {
+            const float projection = glm::dot(local_bounds_corners_[i], local_direction);
+            if (projection > best_projection) {
+                best_projection = projection;
+                best_local_point = local_bounds_corners_[i];
+            }
+        }
+    }
+
+    return position_ + (rotation_ * best_local_point);
 }
 
 std::uint32_t GameObject::getCollisionTypeId() const {

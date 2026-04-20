@@ -67,6 +67,7 @@ add_executable(${PROJECT_NAME}
     src/main.cpp
     src/AppLayer.cpp
     src/BuildingSystem.cpp
+    src/DeferredRenderer.cpp
     src/Engine.cpp
     src/FogOfWar.cpp
     src/GameObject.cpp
@@ -226,6 +227,21 @@ if (BUILD_TESTING)
         ${GLM_INCLUDE_DIR}
     )
     add_test(NAME objective_bc_test COMMAND objective_bc_test)
+
+    add_executable(objective_d_test
+        tests/ObjectiveD_test.cpp
+        src/Engine.cpp
+        src/GameObject.cpp
+        src/Quaternion.cpp
+        src/RtsUnit.cpp
+        src/SceneGraph.cpp
+        src/Utility.cpp
+    )
+    target_include_directories(objective_d_test PRIVATE
+        src
+        ${GLM_INCLUDE_DIR}
+    )
+    add_test(NAME objective_d_test COMMAND objective_d_test)
 
     add_executable(objective_e_test
         tests/ObjectiveE_test.cpp

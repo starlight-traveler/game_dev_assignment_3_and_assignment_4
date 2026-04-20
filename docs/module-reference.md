@@ -7,6 +7,17 @@ title: Module Reference
 
 This page is a short subsystem index for the current codebase.
 
+## `src/main.cpp`
+
+Purpose:
+
+- current Assignment 3 and 4 showcase executable
+- mesh and animation sidecar loading
+- showcase scene setup
+- camera control
+- move order and reset controls
+- deferred render submission
+
 ## `src/Engine.*`
 
 Purpose:
@@ -92,6 +103,16 @@ Purpose:
 - radius and AABB scene queries
 - reusable spatial graph for both rendering and collision broad phase
 
+## `src/DeferredRenderer.*`
+
+Purpose:
+
+- G buffer framebuffer ownership
+- render buffer resize management
+- deferred geometry pass
+- deferred lighting pass
+- multi light submission
+
 ## `src/Renderer3D.*`
 
 Purpose:
@@ -99,7 +120,7 @@ Purpose:
 - shader and texture ownership
 - render queue submission
 - optional bone-matrix upload
-- OpenGL draw execution
+- forward OpenGL draw execution used by older demos
 
 ## `src/shaders/world.vert`
 
@@ -107,6 +128,22 @@ Purpose:
 
 - per-vertex transform
 - optional 4-weight GPU skinning
+
+## `src/shaders/deferred_gbuffer.frag`
+
+Purpose:
+
+- write position
+- write normal
+- write albedo
+
+## `src/shaders/deferred_light.*`
+
+Purpose:
+
+- fullscreen lighting pass
+- loop over the deferred light array
+- combine the G buffer into the final lit frame
 
 ## `blender/meshbin.py`
 

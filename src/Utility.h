@@ -1,123 +1,67 @@
-/**
- * @file Utility.h
- * @brief Internal utility state and helpers for engine runtime data
- */
 #ifndef UTILITY_H
 #define UTILITY_H
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include <glm/glm.hpp>
 
 #include "CollisionResponse.h"
+#include "ConvexCollision.h"
 
 class GameObject;
 
 namespace utility {
-/**
- * @brief Stores the current frame delta values
- * @param delta_time_ms Frame delta in milliseconds
- * @param delta_seconds Frame delta in seconds
- */
+// these functions expose a small shared runtime state bucket for the engine
+// the assignment systems use it to share frame timing object lifetime and collision callbacks
 void setFrameDelta(std::uint64_t delta_time_ms, float delta_seconds);
 
-/**
- * @brief Gets the current frame delta in milliseconds
- * @return Frame delta in milliseconds
- */
 std::uint64_t deltaTimeMs();
 
-/**
- * @brief Gets the current frame delta in seconds
- * @return Frame delta in seconds
- */
 float deltaSeconds();
 
-/**
- * @brief Adds a game object to the active engine list
- * @param object Game object ownership pointer
- * @return New active object count
- */
+// active game objects live in utility owned storage until removed or cleared
 std::size_t addGameObject(std::unique_ptr<GameObject> object);
 
-/**
- * @brief Removes a game object by its render element id
- * @param render_element Render element id
- * @return True when an object was removed
- */
 bool removeGameObjectByRenderElement(std::uint32_t render_element);
 
-/**
- * @brief Updates all active game objects and runs BVH-backed broad-phase collision dispatch
- * @param delta_seconds Delta time in seconds
- */
+// this is the main per frame object update hook
+// it steps gameplay animation and then dispatches collision responses after the broad phase query pass
 void updateGameObjects(float delta_seconds);
 
-/**
- * @brief Clears all active game objects
- */
 void clearGameObjects();
 
-/**
- * @brief Finds an active game object by render element id
- * @param render_element Render element id
- * @return Pointer to matching object or nullptr
- */
+// these lookups are mainly for glue code that only knows the render element id
 const GameObject* findGameObjectByRenderElement(std::uint32_t render_element);
 
-/**
- * @brief Finds a mutable active game object by render element id
- * @param render_element Render element id
- * @return Mutable pointer to matching object or nullptr
- */
 GameObject* findMutableGameObjectByRenderElement(std::uint32_t render_element);
 
-/**
- * @brief Stores a local-space bounds template for a render element id
- * @param render_element Render element id
- * @param min_bounds Minimum local-space corner
- * @param max_bounds Maximum local-space corner
- * @return True when the template was accepted
- */
+// local bounds templates let the renderer side mesh data teach newly created objects about their mesh bounds
 bool setLocalBoundsByRenderElement(std::uint32_t render_element,
                                    const glm::vec3& min_bounds,
                                    const glm::vec3& max_bounds);
 
-/**
- * @brief Clears any local-space bounds template for a render element id
- * @param render_element Render element id
- * @return True when a template or active object bounds were cleared
- */
 bool clearLocalBoundsByRenderElement(std::uint32_t render_element);
 
-/**
- * @brief Returns the built-in collision type id used by RTS units
- * @return RTS collision type id
- */
+bool setLocalConvexHullByRenderElement(std::uint32_t render_element,
+                                       const std::vector<glm::vec3>& points);
+
+bool clearLocalConvexHullByRenderElement(std::uint32_t render_element);
+
+ConvexCollisionQueryResult queryConvexCollisionByRenderElement(std::uint32_t first_render_element,
+                                                               std::uint32_t second_render_element);
+
+// collision type ids let gameplay register pairwise responses without hard wiring object classes together
 std::uint32_t rtsCollisionType();
 
-/**
- * @brief Registers a new collision type id for callback routing
- * @return Newly allocated collision type id
- */
 std::uint32_t registerCollisionType();
 
-/**
- * @brief Registers one callback for collisions between two type ids
- * @param type_a First collision type id
- * @param type_b Second collision type id
- * @param response Callback to invoke on overlap
- * @return True when the callback was stored in the triangular collision table
- */
 bool registerCollisionResponse(std::uint32_t type_a,
                                std::uint32_t type_b,
                                CollisionResponse response);
 
-/**
- * @brief Clears all registered collision response callbacks
- */
 void clearCollisionResponses();
 }  // namespace utility
 

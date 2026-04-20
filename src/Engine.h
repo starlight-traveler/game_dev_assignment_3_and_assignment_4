@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 
 #include "CollisionResponse.h"
+#include "ConvexCollision.h"
 #include "Integration.h"
 
 class AnimationClip;
@@ -192,6 +193,22 @@ bool setLocalBoundsForRenderElement(std::uint32_t render_element,
 bool clearLocalBoundsForRenderElement(std::uint32_t render_element);
 
 /**
+ * @brief Associates a local-space convex support set with a render element id
+ * @param render_element Render element id
+ * @param points Local-space support points
+ * @return True when the support set was accepted
+ */
+bool setConvexHullForRenderElement(std::uint32_t render_element,
+                                   const std::vector<glm::vec3>& points);
+
+/**
+ * @brief Clears a render element's explicit convex support set
+ * @param render_element Render element id
+ * @return True when a template or active object hull was cleared
+ */
+bool clearConvexHullForRenderElement(std::uint32_t render_element);
+
+/**
  * @brief Reports whether a world-space AABB is available for a render element id
  * @param render_element Render element id
  * @return True when the object exists and has bounds
@@ -211,6 +228,16 @@ glm::vec3 getAabbMinForRenderElement(std::uint32_t render_element);
  * @return Maximum corner or zero vector when unavailable
  */
 glm::vec3 getAabbMaxForRenderElement(std::uint32_t render_element);
+
+/**
+ * @brief Queries the convex narrow phase between two managed objects
+ * @param first_render_element First render element id
+ * @param second_render_element Second render element id
+ * @return Intersection plus separation data for the current world transforms
+ */
+ConvexCollisionQueryResult queryConvexCollisionBetweenRenderElements(
+    std::uint32_t first_render_element,
+    std::uint32_t second_render_element);
 
 /**
  * @brief Returns the built-in collision type used by RTS game objects

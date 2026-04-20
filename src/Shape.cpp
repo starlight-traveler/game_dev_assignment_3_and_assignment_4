@@ -5,17 +5,10 @@
 #include <numeric>
 #include <utility>
 
-/**
- * @brief builds cpu side arrays and gpu side opengl state for one mesh
- * @param triangleCount number of triangles in source data
- * @param layout mesh attribute layout
- * @param vertexData packed float data in attribute major order
- *
- * attribute major order means the file stores all position floats first
- * then all normal floats
- * then any later attributes
- * this is why the offset math below advances by whole attribute blocks instead of per vertex strides
- */
+// the constructor does three jobs
+// recover useful cpu side arrays
+// compute local bounds
+// upload the packed data into one vao plus vbo pair
 Shape::Shape(std::size_t triangleCount, const MeshAttributeLayout& layout,
              const std::vector<float>& vertexData,
              std::shared_ptr<const SkeletalRig> skeletal_rig)
@@ -29,23 +22,25 @@ Shape::Shape(std::size_t triangleCount, const MeshAttributeLayout& layout,
       local_bounds_min_(0.0f),
       local_bounds_max_(0.0f),
       has_local_bounds_(false) {
-    // triangle meshes always have 3 vertices per primitive
+    // this loader assumes plain triangles with no index buffer
     const std::size_t vertex_count = triangleCount * 3;
     if (attribute_components_.empty()) {
-        // fallback preserves the old assumption of positions plus normals
+        // if no layout was provided keep the old default of positions plus normals
         attribute_components_ = {3, 3};
     }
 
-    // total floats per vertex is the sum of every declared attribute width
+    // add up every attribute width to see how many floats belong to one logical vertex
     const std::size_t floats_per_vertex = std::accumulate(
         attribute_components_.begin(), attribute_components_.end(), std::size_t{0});
-    // this is how many floats we would expect if the payload were complete
+
+    // this is the full payload size we would expect for a complete mesh
     const std::size_t expected_floats = vertex_count * floats_per_vertex;
-    // stay defensive and only read the part that actually exists
+
+    // stay defensive and only read data that actually exists in the vector
     const std::size_t usable_floats = std::min(expected_floats, vertexData.size());
 
-    // cache positions on the cpu
-    // because the data is attribute major the first attribute block starts at float 0
+    // positions live in the first attribute block
+    // because the file is attribute major they begin at float zero and stay contiguous
     if (attribute_components_.size() >= 1 && attribute_components_[0] >= 3) {
         pos_.reserve(vertex_count);
         const std::size_t stride = static_cast<std::size_t>(attribute_components_[0]);
@@ -53,6 +48,8 @@ Shape::Shape(std::size_t triangleCount, const MeshAttributeLayout& layout,
             pos_.emplace_back(vertexData[i], vertexData[i + 1], vertexData[i + 2]);
         }
     }
+
+    // once positions exist we can compute one local space bounding box for the whole mesh
     if (!pos_.empty()) {
         glm::vec3 min_bounds(std::numeric_limits<float>::max());
         glm::vec3 max_bounds(std::numeric_limits<float>::lowest());
@@ -64,8 +61,9 @@ Shape::Shape(std::size_t triangleCount, const MeshAttributeLayout& layout,
         local_bounds_max_ = max_bounds;
         has_local_bounds_ = true;
     }
-    // cache normals on the cpu too if a second attribute block exists
-    // normals begin after every position float for every vertex
+
+    // normals are the second attribute block when present
+    // the offset skips over the entire position block for all vertices
     if (attribute_components_.size() >= 2 && attribute_components_[1] >= 3) {
         norm_.reserve(vertex_count);
         const std::size_t normal_offset = vertex_count * static_cast<std::size_t>(attribute_components_[0]);
@@ -75,30 +73,31 @@ Shape::Shape(std::size_t triangleCount, const MeshAttributeLayout& layout,
         }
     }
 
-    // create opengl object ids then bind them so later setup calls affect this mesh
+    // create the gpu objects and bind them so subsequent setup lands on this mesh
     glGenBuffers(1, &vbo_);
     glGenVertexArrays(1, &vao_);
     glBindVertexArray(vao_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
 
-    // upload the raw float payload exactly as it came in
-    // opengl keeps its own gpu side copy after this call
+    // upload the packed float payload exactly as it was loaded
+    // after this opengl owns its own gpu side copy
     glBufferData(GL_ARRAY_BUFFER, sizeof(float) * usable_floats,
                  vertexData.data(), GL_STATIC_DRAW);
 
-    // now teach the vao where each attribute block begins
-    // offset_floats tracks how many floats we have skipped so far across whole attribute blocks
+    // now describe where each attribute block begins inside the buffer
+    // offset_floats tracks how many floats of earlier blocks we already skipped
     std::size_t offset_floats = 0;
     for (std::size_t attribute_index = 0; attribute_index < attribute_components_.size(); ++attribute_index) {
         const std::uint32_t component_count = attribute_components_[attribute_index];
         if (component_count == 0 || component_count > 4) {
-            // opengl vertex attrib pointers only make sense for 1 to 4 float components here
+            // skip weird layouts that opengl attribute pointers cannot represent here
             offset_floats += vertex_count * static_cast<std::size_t>(component_count);
             continue;
         }
 
         glEnableVertexAttribArray(static_cast<GLuint>(attribute_index));
-        // convert the float offset into a byte offset because glVertexAttribPointer expects bytes
+
+        // opengl wants a byte pointer style offset not a float index
         const std::size_t offset_bytes = offset_floats * sizeof(float);
         glVertexAttribPointer(static_cast<GLuint>(attribute_index),
                               static_cast<GLint>(component_count),
@@ -106,61 +105,53 @@ Shape::Shape(std::size_t triangleCount, const MeshAttributeLayout& layout,
                               GL_FALSE,
                               0,
                               reinterpret_cast<void*>(offset_bytes));
-        // jump over the entire attribute block for every vertex
+
+        // after binding one attribute jump over its whole block for all vertices
         offset_floats += vertex_count * static_cast<std::size_t>(component_count);
     }
 
-    // unbind to reduce accidental state leaks into later opengl code
+    // unbind now so later opengl setup does not accidentally modify this mesh
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
 }
 
-/**
- * @brief frees the gpu objects created by the constructor
- */
 Shape::~Shape() {
-    // destructor should be safe even for partially initialized shapes
+    // stay defensive so cleanup still works if construction only finished part way
     if (vao_ != 0) {
-        // vao stores the attribute binding setup for this mesh
+        // vao remembers how attributes map onto the uploaded buffer
         glDeleteVertexArrays(1, &vao_);
         vao_ = 0;
     }
 
-    // vbo stores the actual float payload on the gpu
+    // vbo owns the actual raw float payload on the gpu
     if (vbo_ != 0) {
         glDeleteBuffers(1, &vbo_);
         vbo_ = 0;
     }
 }
 
-/**
- * @brief returns the vao handle used by the renderer
- * @return opengl vao id
- */
 GLuint Shape::getVAO() const {
-    // simple getter keeps gpu state private to the class
+    // renderer just needs the handle not the setup details
     return vao_;
 }
 
-/**
- * @brief returns the vertex count for a non indexed triangle draw
- * @return number of vertices in this shape
- */
 GLsizei Shape::getVertexCount() const {
-    // three vertices per triangle
+    // every triangle contributes three vertices to gldrawarrays
     return static_cast<GLsizei>(triangle_count_ * 3);
 }
 
 bool Shape::hasAttribute(std::size_t attributeIndex) const {
     if (attributeIndex >= attribute_components_.size()) {
-        // asking past the stored layout means the attribute does not exist
+        // asking past the stored layout means that slot was never uploaded
         return false;
     }
-    // a zero component attribute is treated as missing
+
+    // a zero width slot is treated as absent
     return attribute_components_[attributeIndex] > 0;
 }
 
 bool Shape::hasSkinningData() const {
+    // skinning only makes sense if there is a rig and the mesh carries ids plus weights
     return skeletal_rig_ && skeletal_rig_->boneCount() > 0 &&
            hasAttribute(3) && hasAttribute(4);
 }
@@ -177,6 +168,11 @@ glm::vec3 Shape::localBoundsMax() const {
     return local_bounds_max_;
 }
 
+const std::vector<glm::vec3>& Shape::localSupportPoints() const {
+    return pos_;
+}
+
 std::shared_ptr<const SkeletalRig> Shape::skeletalRig() const {
+    // shared ownership lets many render objects reuse one imported rig
     return skeletal_rig_;
 }

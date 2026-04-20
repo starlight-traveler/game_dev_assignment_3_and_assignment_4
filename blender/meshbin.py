@@ -129,6 +129,7 @@ def write_meshbin(context, filepath):
         bone_ids = []
         bone_weights = []
         uv_layer = mesh_eval.uv_layers.active.data if mesh_eval.uv_layers.active else None
+        write_uv_block = uv_layer is not None or armature_obj is not None
 
         # export in object space and keep per-loop uv where available
         for tri in mesh_eval.loop_triangles:
@@ -144,6 +145,12 @@ def write_meshbin(context, filepath):
                 if uv_layer:
                     uv = uv_layer[li].uv
                     uvs.extend((float(uv.x), float(uv.y)))
+                elif armature_obj is not None:
+                    # skinned meshes still reserve UV attribute slot 2 so bone ids
+                    # and bone weights stay at shader locations 3 and 4.
+                    # if the artist did not author UVs, generate the same simple
+                    # planar mapping the runtime uses as its shader fallback.
+                    uvs.extend((float(co.x) * 0.35 + 0.5, float(co.z) * 0.35 + 0.5))
 
                 if armature_obj is not None:
                     vertex = mesh_eval.vertices[vi]
@@ -162,7 +169,7 @@ def write_meshbin(context, filepath):
         magic = 0x4D534842  # "MSHB"
         version = 3
         attr_components = [3, 3]
-        if uv_layer:
+        if write_uv_block:
             attr_components.append(2)
         if armature_obj is not None:
             attr_components.extend((4, 4))
@@ -181,7 +188,7 @@ def write_meshbin(context, filepath):
 
             f.write(struct.pack("<{}f".format(len(positions)), *positions))
             f.write(struct.pack("<{}f".format(len(normals)), *normals))
-            if uv_layer:
+            if write_uv_block:
                 f.write(struct.pack("<{}f".format(len(uvs)), *uvs))
             if armature_obj is not None:
                 f.write(struct.pack("<{}f".format(len(bone_ids)), *bone_ids))

@@ -1,5 +1,5 @@
-title: Assignment 2 Engine Documentation
-description: Step-by-step guide to the current game engine, runtime flow, subsystem design, and core mathematics
+title: Assignment 3 and 4 Engine Documentation
+description: Guide to the current assignment showcase including simulation flow collision work animation and deferred rendering
 markdown: kramdown
 theme: minima
 kramdown:

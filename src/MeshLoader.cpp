@@ -128,14 +128,22 @@ std::unique_ptr<Shape> load_header_mesh(std::ifstream& input, const std::string&
         }
     }
 
+    const bool needs_generated_uv_block =
+        skeletal_rig &&
+        layout.attribute_components.size() == 4 &&
+        layout.attribute_components[0] == 3 &&
+        layout.attribute_components[1] == 3 &&
+        layout.attribute_components[2] == 4 &&
+        layout.attribute_components[3] == 4;
+
     std::size_t floats_per_vertex = 0;
     for (std::uint32_t component_count : layout.attribute_components) {
         floats_per_vertex += static_cast<std::size_t>(component_count);
     }
     const std::size_t expected_floats =
         static_cast<std::size_t>(triangle_count) * 3 * floats_per_vertex;
-    std::vector<float> vertex_data(expected_floats, 0.0f);
-    input.read(reinterpret_cast<char*>(vertex_data.data()),
+    std::vector<float> file_vertex_data(expected_floats, 0.0f);
+    input.read(reinterpret_cast<char*>(file_vertex_data.data()),
                static_cast<std::streamsize>(expected_floats * sizeof(float)));
     if (!input) {
         LOG_ERROR(get_logger(),
@@ -143,9 +151,67 @@ std::unique_ptr<Shape> load_header_mesh(std::ifstream& input, const std::string&
                   path, expected_floats);
         return nullptr;
     }
+
+    if (needs_generated_uv_block) {
+        // Older skinned exports without authored UVs wrote only
+        // [pos, norm, bone_ids, bone_weights]. The shader expects skinning data
+        // at attribute locations 3 and 4, so insert a generated UV block in slot 2.
+        const std::size_t vertex_count = static_cast<std::size_t>(triangle_count) * 3;
+        const std::size_t position_float_count = vertex_count * 3;
+        const std::size_t normal_float_count = vertex_count * 3;
+        const std::size_t bone_id_float_count = vertex_count * 4;
+        const std::size_t bone_weight_float_count = vertex_count * 4;
+        const std::size_t normal_offset = position_float_count;
+        const std::size_t bone_id_offset = normal_offset + normal_float_count;
+        const std::size_t bone_weight_offset = bone_id_offset + bone_id_float_count;
+
+        std::vector<float> generated_uvs;
+        generated_uvs.reserve(vertex_count * 2);
+        for (std::size_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index) {
+            const std::size_t position_index = vertex_index * 3;
+            const float x = file_vertex_data[position_index + 0];
+            const float z = file_vertex_data[position_index + 2];
+            generated_uvs.push_back(x * 0.35f + 0.5f);
+            generated_uvs.push_back(z * 0.35f + 0.5f);
+        }
+
+        MeshAttributeLayout padded_layout{};
+        padded_layout.attribute_components = {3, 3, 2, 4, 4};
+
+        std::vector<float> padded_vertex_data;
+        padded_vertex_data.reserve(
+            position_float_count + normal_float_count +
+            generated_uvs.size() + bone_id_float_count + bone_weight_float_count);
+        padded_vertex_data.insert(
+            padded_vertex_data.end(),
+            file_vertex_data.begin(),
+            file_vertex_data.begin() + static_cast<std::ptrdiff_t>(normal_offset));
+        padded_vertex_data.insert(
+            padded_vertex_data.end(),
+            file_vertex_data.begin() + static_cast<std::ptrdiff_t>(normal_offset),
+            file_vertex_data.begin() + static_cast<std::ptrdiff_t>(bone_id_offset));
+        padded_vertex_data.insert(
+            padded_vertex_data.end(),
+            generated_uvs.begin(),
+            generated_uvs.end());
+        padded_vertex_data.insert(
+            padded_vertex_data.end(),
+            file_vertex_data.begin() + static_cast<std::ptrdiff_t>(bone_id_offset),
+            file_vertex_data.begin() + static_cast<std::ptrdiff_t>(bone_weight_offset));
+        padded_vertex_data.insert(
+            padded_vertex_data.end(),
+            file_vertex_data.begin() + static_cast<std::ptrdiff_t>(bone_weight_offset),
+            file_vertex_data.end());
+
+        return std::make_unique<Shape>(static_cast<std::size_t>(triangle_count),
+                                       padded_layout,
+                                       padded_vertex_data,
+                                       std::move(skeletal_rig));
+    }
+
     return std::make_unique<Shape>(static_cast<std::size_t>(triangle_count),
                                    layout,
-                                   vertex_data,
+                                   file_vertex_data,
                                    std::move(skeletal_rig));
 }
 }  // namespace

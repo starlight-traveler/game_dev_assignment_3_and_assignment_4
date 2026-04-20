@@ -86,4 +86,4 @@ They verify:
 - the child bone reaches the expected rotated positions
 - playback stops cleanly at the end of a non-looping clip
 
-The mesh viewer path in `src/main.cpp` also exercises the real asset pipeline by loading `.meshbin` plus optional `.animbin` sidecars together.
+The current `assignment_1` showcase path in `src/main.cpp` also exercises the real asset pipeline by loading `.meshbin` plus optional `.animbin` sidecars together.

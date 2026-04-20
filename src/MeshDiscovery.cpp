@@ -8,12 +8,17 @@ std::vector<std::string> discover_meshbins(const std::string& folder_arg,
   // list of paths we will return
   std::vector<std::string> paths;
 
-  // if folder is valid, walk the tree and grab every .meshbin under it
+  // accept either an exact mesh path or a directory.
+  // supporting a direct file path makes it easy to launch one specific
+  // animated asset pair without opening every mesh in the parent folder.
   if (!folder_arg.empty()) {
     // wrap input string in filesystem path so we can query it
     const std::filesystem::path input_path(folder_arg);
     std::error_code ec;
-    if (std::filesystem::is_directory(input_path, ec) && !ec) {
+    if (std::filesystem::is_regular_file(input_path, ec) && !ec &&
+        input_path.extension() == ".meshbin") {
+      paths.push_back(input_path.string());
+    } else if (std::filesystem::is_directory(input_path, ec) && !ec) {
       // directory exists, recurse so nested asset folders work too
       for (const auto& entry : std::filesystem::recursive_directory_iterator(input_path, ec)) {
         if (ec) {

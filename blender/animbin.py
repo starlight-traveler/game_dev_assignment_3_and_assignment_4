@@ -87,13 +87,95 @@ def _get_export_action(armature_obj, action_name):
     raise RuntimeError("No action selected. Set action_name or make one action active on the armature.")
 
 
-def _animated_bone_names(action):
+def _find_export_slot(action, armature_obj):
+    # blender's newer slotted action system can store multiple independent
+    # channel sets inside one action. when exporting from an armature, prefer
+    # the slot already associated with that object's animation data.
+    slots = list(getattr(action, "slots", ()))
+    if not slots:
+        return None
+
+    animation_data = armature_obj.animation_data if armature_obj is not None else None
+    candidate_identifiers = []
+    if animation_data is not None:
+        current_slot = getattr(animation_data, "action_slot", None)
+        if current_slot is not None and getattr(current_slot, "identifier", ""):
+            candidate_identifiers.append(current_slot.identifier)
+
+        last_slot_identifier = getattr(animation_data, "last_slot_identifier", "")
+        if last_slot_identifier:
+            candidate_identifiers.append(last_slot_identifier)
+
+    for identifier in candidate_identifiers:
+        for slot in slots:
+            if getattr(slot, "identifier", "") == identifier:
+                return slot
+
+    for slot in slots:
+        users_fn = getattr(slot, "users", None)
+        if users_fn is None:
+            continue
+        try:
+            users = users_fn()
+        except Exception:
+            continue
+        for user in users:
+            if user == armature_obj:
+                return slot
+
+    active_slot = getattr(getattr(action, "slots", None), "active", None)
+    if active_slot is not None:
+        return active_slot
+
+    if len(slots) == 1:
+        return slots[0]
+
+    return None
+
+
+def _collect_action_fcurves(action, armature_obj):
+    # blender 4.x actions may be layered/slotted internally. direct
+    # action.fcurves access is documented as legacy compatibility behavior and
+    # may be absent or insufficient depending on the build and action layout.
+    #
+    # collect curves in this order:
+    # 1. the direct legacy collection when available
+    # 2. the layered channelbag data from action layers/strips/slots
+    direct_fcurves = None
+    try:
+        direct_fcurves = list(action.fcurves)
+    except Exception:
+        direct_fcurves = None
+
+    layered_fcurves = []
+    target_slot = _find_export_slot(action, armature_obj)
+    target_slot_handle = getattr(target_slot, "handle", None)
+    for layer in getattr(action, "layers", ()):
+        for strip in getattr(layer, "strips", ()):
+            for channelbag in getattr(strip, "channelbags", ()):
+                if target_slot_handle is not None:
+                    slot = getattr(channelbag, "slot", None)
+                    slot_handle = getattr(channelbag, "slot_handle", None)
+                    if slot is not None and getattr(slot, "handle", None) != target_slot_handle:
+                        continue
+                    if slot is None and slot_handle is not None and slot_handle != target_slot_handle:
+                        continue
+                layered_fcurves.extend(list(getattr(channelbag, "fcurves", ())))
+
+    if layered_fcurves:
+        return layered_fcurves
+    if direct_fcurves is not None:
+        return direct_fcurves
+    return []
+
+
+def _animated_bone_names(action, armature_obj):
     # scan every fcurve in the action and keep only the ones whose data path
     # points at a pose bone quaternion channel. a set is used so each bone
     # name is stored only once even though quaternion animation usually has
     # four separate fcurves for x, y, z, and w.
     bone_names = set()
-    for fcurve in action.fcurves:
+    for fcurve in _collect_action_fcurves(action, armature_obj):
         match = _ROTATION_QUATERNION_PATH.match(fcurve.data_path)
         if match:
             bone_names.add(match.group(1))
@@ -102,7 +184,7 @@ def _animated_bone_names(action):
 
 def _animated_bones_in_armature_order(armature_obj, action):
     # start from the set of animated bone names found in the action.
-    animated_names = _animated_bone_names(action)
+    animated_names = _animated_bone_names(action, armature_obj)
     if not animated_names:
         raise RuntimeError("Action '{}' has no pose bone quaternion curves.".format(action.name))
 
@@ -124,12 +206,12 @@ def _animated_bones_in_armature_order(armature_obj, action):
     return ordered_bones
 
 
-def _keyframe_frames(action, bone_names):
+def _keyframe_frames(action, armature_obj, bone_names):
     # gather every frame index that has quaternion keys for the bones we are
     # actually exporting. using a set removes duplicates caused by multiple
     # quaternion components landing on the same frame.
     keyframes = set()
-    for fcurve in action.fcurves:
+    for fcurve in _collect_action_fcurves(action, armature_obj):
         match = _ROTATION_QUATERNION_PATH.match(fcurve.data_path)
         if not match or match.group(1) not in bone_names:
             continue
@@ -167,7 +249,7 @@ def write_animbin(context, filepath, action_name):
     action = _get_export_action(armature_obj, action_name)
     ordered_bones = _animated_bones_in_armature_order(armature_obj, action)
     bone_name_lookup = [bone_name for _, bone_name in ordered_bones]
-    keyed_frames = _keyframe_frames(action, set(bone_name_lookup))
+    keyed_frames = _keyframe_frames(action, armature_obj, set(bone_name_lookup))
 
     # convert blender's fps / fps_base values into an actual frames-per-second
     # number. this is necessary because timestamps in the file are written in
@@ -182,11 +264,18 @@ def write_animbin(context, filepath, action_name):
     previous_frame = scene.frame_current_final
     animation_data = armature_obj.animation_data_create()
     previous_action = animation_data.action
+    previous_action_slot = getattr(animation_data, "action_slot", None)
+    export_slot = _find_export_slot(action, armature_obj)
 
     try:
         # temporarily force the target action onto the armature so sampling the
         # pose at each keyframe pulls data from the clip we are exporting.
         animation_data.action = action
+        if export_slot is not None and hasattr(animation_data, "action_slot"):
+            try:
+                animation_data.action_slot = export_slot
+            except Exception:
+                pass
 
         with open(filepath, "wb") as output:
             # header:
@@ -253,6 +342,11 @@ def write_animbin(context, filepath, action_name):
     finally:
         # always restore blender state, even if an exception happens midway
         # through export. the finally block guarantees cleanup runs.
+        if hasattr(animation_data, "action_slot"):
+            try:
+                animation_data.action_slot = previous_action_slot
+            except Exception:
+                pass
         animation_data.action = previous_action
         _set_scene_frame(scene, previous_frame)
 

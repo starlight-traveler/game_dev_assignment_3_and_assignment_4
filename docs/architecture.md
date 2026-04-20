@@ -105,15 +105,48 @@ Rendering is split across:
 - `ShaderProgram`
 - `Texture2D`
 - `Renderer3D`
+- `DeferredRenderer`
 
-For skinned meshes, `Renderer3D` uploads the current bone matrix array and `src/shaders/world.vert` performs the 4-weight skinning blend on the GPU.
+There are now two render paths in the repo
 
-## 8. Executables
+`Renderer3D` is still the simple forward path used by older demos
+
+`DeferredRenderer` is the current path used by `assignment_1`
+
+That renderer owns
+
+- the G buffer framebuffer
+- the position normal and albedo textures
+- the depth renderbuffer
+- the geometry pass shader
+- the lighting pass shader
+
+For skinned meshes the current bone matrix array is still passed down from the `GameObject`
+
+`src/shaders/world.vert` performs the 4 weight skinning blend on the GPU before the deferred buffers are written
+
+## 8. Showcase Executable
+
+`src/main.cpp` is the Assignment 3 and Assignment 4 showcase executable
+
+It owns
+
+- asset discovery
+- optional animation sidecar loading
+- showcase scene setup
+- move command choreography
+- collision callback registration
+- render side scene graph queries
+- deferred render submission
+
+That file is the clearest place to look when you want to understand how the assignment pieces fit together in one run
+
+## 9. Executables
 
 The repository currently exposes three important entry points:
 
 - `src/main.cpp`
-  Multi-window mesh viewer and engine loop
+  Assignment 3 and 4 showcase and engine loop
 - `demo/RTSDemo.cpp`
   RTS demo
 - `demo/DoomDemo.cpp`
