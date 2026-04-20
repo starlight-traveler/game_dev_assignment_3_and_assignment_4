@@ -5,148 +5,213 @@ title: Assignment 4 Guide
 
 # Assignment 4 Deferred Rendering Guide
 
-This page explains the Assignment 4 part that was added to `assignment_1`
+This page documents the deferred rendering path that now draws `assignment_1`
 
-The short version is simple
+Assignment 3 updates the scene state
 
-Assignment 3 is the simulation side
+Assignment 4 draws that state through a buffered two pass pipeline
 
-Assignment 4 is the way that scene is drawn
+## 1 Render Model
 
-## 1 What Deferred Rendering Means Here
+In a forward renderer geometry and lighting are evaluated together
 
-In a forward renderer the object is drawn and lit at the same time
+That keeps the pipeline simple but it repeats lighting work while each mesh is being drawn
 
-That is fine when the light count is small
+Deferred rendering changes the order
 
-Once the light count grows the same mesh work starts getting repeated more than it needs to
+1. draw visible geometry once and store surface data
+2. light the stored surface data in a second pass
 
-Deferred rendering splits that into two passes
+The implementation for this repository lives in `src/DeferredRenderer.cpp`
 
-First the engine stores surface data in buffers
+## 2 G Buffer Layout
 
-Then it does the lighting work in a second pass
+The renderer owns one framebuffer object that stores the intermediate scene state
 
-That is what this repo now does in `src/DeferredRenderer.cpp`
+The current G buffer contains
 
-## 2 What Render Buffer Management Means
+- world position
+- world normal
+- albedo color
+- depth
 
-The phrase render buffer management sounds bigger than it is
+In code the attachments are
 
-In this project it means the renderer now owns and resizes the buffers that hold the intermediate frame data
+- `g_position_tex_`
+- `g_normal_tex_`
+- `g_albedo_tex_`
+- `depth_rbo_`
 
-The main pieces are
+That is the render buffer management part of the assignment
 
-- one framebuffer object for the G buffer
-- one texture for world position
-- one texture for world normal
-- one texture for albedo color
-- one depth renderbuffer
+The engine is now responsible for creating these buffers using them for rendering and recreating them when the drawable size changes
 
-Those buffers are created in `DeferredRenderer::ensureFrameBuffers`
+## 3 Buffer Lifetime And Resize Rules
 
-If the window size changes they are recreated at the new size
+`DeferredRenderer::ensureFrameBuffers` checks the current drawable width and height before each frame
 
-That is the management part
+If the existing textures already match the window size they are reused
 
-The engine is not just drawing straight to the screen anymore
+If the size changed the old buffers are destroyed and a new set is allocated
 
-It is drawing into a set of controlled intermediate buffers first
+That keeps the offscreen buffers consistent with the current window
 
-## 3 Geometry Pass
+Without that resize path the geometry pass and lighting pass would read and write different sized targets
 
-The geometry pass draws the meshes once
+## 4 Geometry Pass
 
-It does not try to finish the lighting yet
+The geometry pass writes surface attributes into the G buffer
 
-It just writes useful surface information into the G buffer
+The input to this pass is the same render state that the rest of the engine already produces
 
-`src/shaders/deferred_gbuffer.frag` writes
+- mesh geometry from `Shape`
+- model matrix from the managed object state
+- view and projection matrices from the camera
+- optional skin matrices from animation playback
+
+`src/shaders/world.vert` performs the world transform and optional skinning
+
+`src/shaders/deferred_gbuffer.frag` writes the three stored outputs
+
+The fragment outputs are conceptually
+
+$$
+G_p = p_{world}
+$$
+
+$$
+G_n = \hat n_{world}
+$$
+
+$$
+G_a = \text{albedo}
+$$
+
+So after the geometry pass the renderer has a screen sized description of the visible surfaces
+
+## 5 Lighting Pass Mathematics
+
+The second pass draws one fullscreen triangle
+
+For each screen pixel the lighting shader reads back the stored position normal and albedo and evaluates the light array
+
+The current fragment shader in `src/shaders/deferred_light.frag` follows this shape
+
+Ambient term
+
+$$
+L_{ambient} = k_a A
+$$
+
+Per light
+
+$$
+\mathbf{l}_i = \mathbf{x}_i - \mathbf{p}
+$$
+
+$$
+d_i = \|\mathbf{l}_i\|
+$$
+
+$$
+\hat{\mathbf{l}}_i = \frac{\mathbf{l}_i}{d_i}
+$$
+
+$$
+\text{diffuse}_i = \max(\hat{\mathbf{n}} \cdot \hat{\mathbf{l}}_i, 0)
+$$
+
+$$
+\text{falloff}_i = 1 - \frac{d_i}{r_i}
+$$
+
+$$
+\text{attenuation}_i = \text{falloff}_i^2 I_i
+$$
+
+Final color
+
+$$
+L = L_{ambient} + \sum_i A \odot C_i \cdot \text{diffuse}_i \cdot \text{attenuation}_i
+$$
+
+Where
+
+- $A$ is albedo
+- $\mathbf{p}$ is world position
+- $\hat{\mathbf{n}}$ is the normalized world normal
+- $\mathbf{x}_i$ is light position
+- $r_i$ is light radius
+- $I_i$ is light intensity
+- $C_i$ is light color
+
+Lights outside their radius contribute nothing
+
+That keeps the work bounded and makes the radius parameter visually meaningful
+
+## 6 Why This Scales Better For N Lights
+
+The geometry pass is independent of the light count
+
+Visible meshes are transformed and written into the G buffer once
+
+After that the lighting pass loops over the light array
+
+That changes the cost profile
+
+The engine still performs more lighting work as lights are added
+
+But it avoids redrawing the full visible geometry set once per light
+
+That is the practical value of deferred rendering for the assignment requirement
+
+## 7 Connection To The Assignment 3 Runtime
+
+The deferred renderer is not a separate demo layer
+
+It consumes the same runtime state produced by the Assignment 3 systems
+
+The data flow is
+
+1. `updateActiveGameObjects` advances managed objects
+2. animation playback refreshes skin matrices
+3. the render side `SceneGraph` produces the visible object ids
+4. `main.cpp` builds one `RenderCommand` per visible object
+5. `DeferredRenderer` executes the geometry pass and lighting pass
+
+So the rendering path sits after the simulation path and uses its final transforms bounds and animation output
+
+## 8 Current Light Configuration
+
+`src/main.cpp` builds six deferred lights each frame
+
+The light data includes
 
 - position
-- normal
-- albedo
+- color
+- radius
+- intensity
 
-That means after the geometry pass the engine has a screen sized record of what the visible surfaces are
+Two screen modes currently exist
 
-## 4 Lighting Pass
+- `ScreenMode::showcase`
+- `ScreenMode::rotating_light`
 
-The lighting pass is the second half
+Both modes use the same deferred pipeline
 
-Instead of redrawing every mesh for every light the engine draws one fullscreen triangle
+The second mode changes the orbit speed radius and intensity so the lighting motion is easier to read
 
-The fragment shader samples the three G buffer textures and loops over the light array
-
-That work lives in
-
-- `src/shaders/deferred_light.vert`
-- `src/shaders/deferred_light.frag`
-
-So the lighting cost is now tied to the screen pixels that were visible instead of being tied to every mesh draw call over and over
-
-## 5 Why This Helps With N Lights
-
-This is the real reason deferred rendering was worth adding
-
-The mesh data is written once in the geometry pass
-
-After that the lighting shader can walk over a list of lights
-
-So adding more lights does not force another full geometry pass for each light
-
-That is what the assignment means when it talks about demonstrating N light sources
-
-The scene still has to do more lighting work as lights are added
-
-But it avoids repeating the whole mesh draw for every light
-
-## 6 How The Showcase Demonstrates It
-
-`assignment_1` uses the deferred path for the main scene
-
-The demo sets up six colored lights every frame
-
-There are two easy things to show in a video
-
-- the scene is already being lit by several lights at once
-- the yellow button switches to a more obvious rotating light mode
-
-That rotating mode is useful because the light movement makes it clear that the lighting is dynamic and not baked into the textures
-
-## 7 How It Fits Together With Assignment 3
-
-The nice part of the current showcase is that the rendering work is not isolated from the gameplay work
-
-The same scene also shows
-
-- movement
-- animation
-- collision checks
-- collision responses
-
-So the final video can show both assignments in one run
-
-That matters because it makes the engine feel like one system instead of two unrelated class exercises
-
-## 8 Main Files
+## 9 Main Files
 
 - `src/main.cpp`
-  Builds the showcase scene and submits draw commands into the deferred renderer.
+  Builds the scene and submits visible objects into the deferred renderer.
 - `src/DeferredRenderer.h`
 - `src/DeferredRenderer.cpp`
-  Own the G buffer resources and the two pass draw flow.
+  Own the G buffer attachments the geometry pass and the lighting pass.
+- `src/shaders/world.vert`
+  Performs transforms and optional 4 weight GPU skinning.
 - `src/shaders/deferred_gbuffer.frag`
   Writes position normal and albedo.
 - `src/shaders/deferred_light.vert`
 - `src/shaders/deferred_light.frag`
-  Read the G buffer and apply the light array.
-
-## 9 What To Say In A Short Demo
-
-If you need a short explanation while the app is running this is the simple version
-
-The first pass fills render buffers with surface data
-
-The second pass lights that data with several dynamic lights
-
-That is why the scene can show many lights without redrawing the whole mesh set for each one
+  Execute the fullscreen lighting pass.

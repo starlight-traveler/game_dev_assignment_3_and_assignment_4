@@ -5,83 +5,122 @@ title: Objective D Guide
 
 # Objective D Guide
 
-Objective D is the convex narrow phase part of Assignment 3
+Objective D is the convex narrow phase requirement in Assignment 3
 
-This is the stage where the engine stops relying on broad bounds alone and answers the real collision question for convex shapes
+Broad phase answers maybe
 
-## 1 What Objective D Is Asking For
+Objective D answers the exact convex question after that
 
-Broad phase is the cheap maybe stage
+## 1 Role In The Collision Stack
 
-It tells the engine which pairs are worth checking
+The current collision stack runs in this order
 
-Objective D is the exact check after that
+1. broad phase candidate generation through the BVH
+2. exact AABB overlap test
+3. convex narrow phase
+4. collision callback dispatch
 
-The engine needs to answer two things
+That ordering matters
 
-- are these two convex shapes intersecting
-- if they are not intersecting how far apart are they and in what direction
+The broad phase and the AABB overlap test remove obvious misses before the expensive convex work begins
 
-That second part matters because it makes the result useful for more than a yes or no test
+## 2 Support Function Mathematics
 
-## 2 Where The Shape Data Comes From
+The narrow phase uses support queries
+
+For a convex set \(A\) and a direction \(\mathbf{d}\) the support function is
+
+$$
+\text{support}_A(\mathbf{d}) = \arg \max_{\mathbf{a} \in A} (\mathbf{a} \cdot \mathbf{d})
+$$
+
+This means the farthest point of the shape in a chosen direction
+
+The GJK query works on the Minkowski difference \(A - B\)
+
+Its support function is
+
+$$
+\text{support}_{A-B}(\mathbf{d}) =
+\text{support}_A(\mathbf{d}) -
+\text{support}_B(-\mathbf{d})
+$$
+
+That is the key operation used by `src/ConvexCollision.h`
+
+## 3 Where The Support Data Comes From
 
 Imported meshes already keep local vertex positions inside `Shape`
 
-That means the engine already has a simple set of points that describe the mesh in local space
-
-Objective D reuses those points as convex support data
+Those points are reused directly as convex support data
 
 The data path is
 
-- `Shape::localSupportPoints()` exposes the stored local positions
+- `Shape::localSupportPoints()` exposes the stored mesh positions
 - `main.cpp` sends those points into the engine for each render element
 - `GameObject` stores that local convex set
 - `GameObject::supportPointWorld()` answers support queries in world space
 
-If an object does not have explicit mesh support points the engine still has a fallback
+If explicit mesh support data does not exist the engine falls back to the corners of the local bounds box
 
-It can use the corners of the local bounds box
+So bounded objects still participate in the narrow phase even without imported mesh hull data
 
-So bounded objects still have a convex shape to test even when they were not imported from a richer mesh
+## 4 World Space Support Queries
 
-## 3 What A Support Point Is
+The stored support set lives in object local space
 
-A support point is just the farthest point of a shape in a chosen direction
+The query direction arrives in world space
 
-That is the whole idea
+So the engine first rotates the direction into local space then finds the best local point then transforms that point back to world space
 
-If the algorithm asks for the farthest point to the right the object returns the point on the hull that sticks out the most to the right
+Conceptually the steps are
 
-That sounds small but it is exactly the operation that GJK needs
+$$
+\mathbf{d}_{local} = q^{-1} \mathbf{d}_{world}
+$$
 
-It means the engine does not have to compare every triangle against every other triangle
+$$
+\mathbf{p}_{local} = \arg \max_{\mathbf{v} \in H} (\mathbf{v} \cdot \mathbf{d}_{local})
+$$
 
-It only needs a way to answer that one farthest point query over and over
+$$
+\mathbf{p}_{world} = \mathbf{x} + q \mathbf{p}_{local}
+$$
 
-## 4 What GJK Is Doing
+Where
 
-The narrow phase is implemented in `src/ConvexCollision.h`
+- \(H\) is the local convex support set
+- \(q\) is object rotation
+- \(\mathbf{x}\) is object position
 
-The algorithm used is GJK
+That is the mathematical shape of `GameObject::supportPointWorld()`
 
-In plain language the loop is
+## 5 GJK Search Structure
 
-1. pick a search direction
-2. ask both shapes for support points
-3. build a point in Minkowski difference space
-4. keep a small simplex of the best points so far
-5. move the search toward the point closest to the origin
-6. if the simplex encloses the origin the shapes intersect
-7. if progress stops the closest points and separation are returned
+The algorithm used in `src/ConvexCollision.h` is GJK
 
-The nice thing about GJK here is that it works well with the support point model the engine already has
+It keeps a small simplex in Minkowski difference space
 
-It is also a good fit for convex imported meshes and convex box fallbacks
+The simplex may contain
 
-## 5 What The Engine Returns
+- one point
+- a line segment
+- a triangle
+- a tetrahedron
 
-The public query shape is
+Each iteration does three jobs
+
+1. ask for a new support point along the current search direction
+2. compute the point on the simplex closest to the origin
+3. update the search direction toward that closest point
+
+If the simplex encloses the origin the shapes intersect
+
+If progress stops before that the closest points and separation data are returned
+
+## 6 Returned Quantities
+
+The public query result is
 
 ```cpp
 ConvexCollisionQueryResult queryConvexCollisionBetweenRenderElements(
@@ -89,58 +128,50 @@ ConvexCollisionQueryResult queryConvexCollisionBetweenRenderElements(
     std::uint32_t second_render_element);
 ```
 
-The result reports
+The result contains
 
 - whether convex support data existed
-- whether the two convex shapes intersect
-- the current separation distance when they do not intersect
-- the separating axis in world space
-- witness points on the first and second shapes
+- whether the shapes intersect
+- separation distance
+- separating axis
+- witness point on the first shape
+- witness point on the second shape
 
-The witness points are the points on each shape that were closest during the final query state
+When the shapes do not intersect the separation distance is computed from the witness points
 
-That makes the result more useful for debugging and for future response work
+$$
+d = \|\mathbf{p}_2 - \mathbf{p}_1\|
+$$
 
-## 6 Where Objective D Sits In The Runtime
+The separating axis is the normalized direction from the first witness point to the second
 
-The collision stack runs in this order
+Those extra values are what make the result more useful than a plain yes or no collision flag
 
-1. broad-phase BVH candidate generation
-2. exact AABB overlap check
-3. GJK convex narrow phase
-4. callback dispatch for confirmed intersections
+## 7 Runtime Placement
 
-The exact AABB step still matters
+Objective D is part of the real engine path now
 
-It is cheaper than GJK so it filters out pairs before the expensive convex work starts
+`src/Utility.cpp` runs the convex narrow phase only after a pair survives
 
-That means Objective D is part of the real runtime path now and not just a helper function sitting off to the side
+- spatial candidate generation
+- exact AABB overlap
 
-## 7 Main Files
+That keeps the expensive work focused on the pairs that are already likely to matter
+
+It also means the event system only dispatches callbacks for pairs that passed the full collision stack
+
+## 8 Main Files
 
 - `src/ConvexCollision.h`
-  Header only GJK narrow phase plus closest point and separation output.
+  Header only GJK implementation plus separation and witness output.
 - `src/GameObject.h`
 - `src/GameObject.cpp`
-  Store local convex support data and answer world space support queries.
+  Store local convex hull data and answer world space support queries.
 - `src/Shape.h`
 - `src/Shape.cpp`
-  Expose imported mesh points for support queries.
+  Expose imported mesh points as support data.
 - `src/Utility.cpp`
-  Calls the narrow phase after broad phase pruning and before callback dispatch.
+  Calls the narrow phase during runtime collision processing.
 - `src/Engine.h`
 - `src/Engine.cpp`
-  Expose the direct query function to the rest of the engine.
-
-## 8 What You Can Point To In The Showcase
-
-When units meet in `assignment_1` the engine is not only using big broad bounds
-
-It is doing
-
-- broad phase to find likely pairs
-- exact AABB overlap
-- convex narrow phase to confirm the pair
-- collision callback dispatch after the pair is confirmed
-
-So Objective D is visible in the demo through the way the units react when they actually meet in the middle of the scene
+  Expose the direct convex query API.

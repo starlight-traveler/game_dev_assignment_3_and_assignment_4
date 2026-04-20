@@ -7,84 +7,81 @@ title: Objective E Guide
 
 Objective E is the demonstration objective for Assignment 3
 
-This is the part where the project has to feel like one engine runtime and not a pile of separate features
+The requirement is not another isolated subsystem
 
-The current answer to Objective E is `assignment_1`
+The requirement is a working runtime order where the new systems feed each other correctly
 
-That executable now shows the Assignment 3 systems and the Assignment 4 deferred renderer in one scene
+The current implementation uses `assignment_1` as that runtime
 
-## 1 What Objective E Really Means
+## 1 Runtime Meaning Of Objective E
 
-Objective E is not asking for one more isolated class or helper function
+Objective E is satisfied only if the engine runs the assignment work in a real frame loop
 
-It is asking whether the systems actually work together in the order a game frame needs
+The important order is
 
-That means
+1. update time
+2. update managed objects
+3. update animation state
+4. run collision tests
+5. dispatch collision responses
+6. render the latest scene state
 
-1. time updates
-2. objects update
-3. animation updates
-4. collision work runs
-5. collision responses fire
-6. rendering uses the latest state
+That ordering is what turns Objectives A through D into one executable system
 
-That full chain is what `assignment_1` now shows
+## 2 Current Demonstration Executable
 
-## 2 Why `assignment_1` Is The Demo To Use
+The current demonstration executable is `src/main.cpp`
 
-It is the easiest executable to explain because the important systems are all visible on screen
+That file was chosen because it already owns
 
-You can see
+- asset loading
+- object creation
+- scene setup
+- render side scene graph queries
+- final render submission
 
-- several engine managed objects in one scene
-- optional animation playback from `.animbin`
-- move commands
-- collision reactions
-- scene graph driven render submission
-- deferred lighting with several lights
+The same executable now draws through the deferred renderer as well so the Assignment 3 runtime and the Assignment 4 draw path use the same scene state
 
-That makes it the right place to show Objective E
+## 3 Startup And Asset Binding
 
-## 3 Startup And Asset Loading
+At startup the executable loads `.meshbin` assets through `MeshLoader`
 
-The executable starts by loading `.meshbin` files
+If a mesh has skinning data it also searches for a same name `.animbin` clip
 
-If a mesh has skinning data it also checks for a same name `.animbin` file
+When the clip exists it is attached to the managed object during setup
 
-If that clip exists it gets attached automatically
+This keeps the asset binding rule simple
 
-That is why `Untitled.meshbin` and `Untitled.animbin` work together in the showcase
+- mesh data comes from `.meshbin`
+- animation data comes from `.animbin`
 
-There is also a useful fallback in the current version
+If the runtime receives only one mesh path it duplicates that asset into a small scene arrangement
 
-If you pass only one mesh path the app duplicates that asset into a small scene
+That keeps the demonstration path scene based instead of object based
 
-That way the assignment still looks like a scene and not one object sitting by itself
+## 4 Managed Object And Scene Construction
 
-## 4 Scene Setup
+After assets are loaded the executable creates one managed object per render element with `spawnRtsGameObject`
 
-After loading the assets the executable creates one managed object per render element with `spawnRtsGameObject`
+Each object receives
 
-Each object then gets
-
-- local bounds
+- transform state
+- bounds
 - convex hull support data
-- optional rig and animation clip
-- a scene graph node
+- optional animation state
+- a render side `SceneGraph` node
 
-The executable also registers a collision callback for the RTS unit collision type
+The setup path also registers the RTS collision callback pair
 
-That callback does real runtime work
+That means the event system is ready before the first frame begins
 
-It separates the objects and sends them away from each other after a confirmed collision
+## 5 Frame Order In The Current Runtime
 
-So the reactions you see in the showcase are part of the engine event path
-
-## 5 Runtime Order In The Demo
+The frame loop in `assignment_1` has this shape
 
 ```text
-frame delta stored
-  -> showcase movement orders updated when needed
+frame delta stored in utility
+  -> showcase movement targets refreshed when needed
   -> updateActiveGameObjects
   -> per object gameplay update
   -> animation playback and skin matrix refresh
@@ -92,63 +89,100 @@ frame delta stored
   -> exact AABB overlap test
   -> convex narrow phase
   -> collision callback dispatch
-  -> render side scene graph sync
+  -> render side SceneGraph sync
   -> deferred render command submission
   -> geometry pass
   -> lighting pass
 ```
 
-That is the full Objective E story
+That is the concrete Objective E path in the current branch
 
-The systems are running in one real frame loop
+## 6 State Handoff Between Systems
 
-## 6 What The Showcase Lets You Point To
+The important architectural detail is that each stage produces data for the next stage
 
-The current scene was built to make the important parts obvious
+`utility` stores the frame delta
 
-You can point out
+`GameObject` updates use that delta to advance position rotation and animation time
 
-- units moving through the same space
-- animation playing on skinned assets
-- collisions happening when the units meet
-- visible reactions after those collisions
-- camera movement around the scene
-- the yellow button making the light motion more obvious
-- the green button resetting the scene to the intended demo state
+Animation playback produces the current skin matrices
 
-The right click rally command is especially useful in a short video because it forces the units back into the middle of the map and makes the collision path easy to show
+Collision processing reads the updated bounds and convex data
 
-## 7 Where The Objective E Work Lives
+The render side scene graph reads the updated object transforms
 
-- `src/main.cpp`
-  Showcase setup controls scene layout move orders and render submission.
-- `src/Engine.cpp`
-  Public API used by the showcase to talk to the runtime.
-- `src/Utility.cpp`
-  Per frame object update animation update collision broad phase and callback dispatch.
-- `src/SceneGraph.cpp`
-  Render side spatial queries and transform propagation.
-- `src/DeferredRenderer.cpp`
-  The Assignment 4 draw path that renders the same scene after the Assignment 3 update work is done.
-- `tests/ObjectiveA_test.cpp`
-  Objective A verification.
-- `tests/ObjectiveBC_test.cpp`
-  Animation and collision callback verification.
-- `tests/ObjectiveE_test.cpp`
-  Scene graph and BVH query verification.
+The deferred renderer then consumes
 
-## 8 Why This Satisfies Objective E
+- mesh geometry
+- model matrices
+- camera matrices
+- optional skin matrices
 
-The current branch does show the Assignment 3 systems working together
+So the rendered frame is built from the exact state produced by the simulation and collision stages earlier in the same frame
+
+## 7 Current Scene Behavior
+
+The scene is arranged as a ring of managed objects around the origin
+
+Each object alternates between a home position and a rally position
+
+That autonomous movement does two things for the runtime
+
+- it keeps the object update path active
+- it forces repeated interaction through the center of the scene
+
+The collision callback then separates colliding pairs and issues new short move commands away from the contact
+
+That makes the event system part of the visible scene evolution rather than an isolated test hook
+
+## 8 Supporting Test Coverage
+
+The executable is the runtime demonstration
+
+The tests still cover the individual pieces underneath it
+
+`tests/ObjectiveA_test.cpp` covers
+
+- linear and angular integration
+- acceleration and impulse helpers
+- automatic AABB refresh
+
+`tests/ObjectiveBC_test.cpp` covers
+
+- forward kinematics animation update
+- collision callback registration and dispatch
+
+`tests/ObjectiveE_test.cpp` covers
+
+- scene graph parent child behavior
+- BVH rebuilds
+- radius query behavior
+- AABB query behavior
+- removal correctness
+
+## 9 Why This Satisfies Objective E
+
+The current branch does show the Assignment 3 systems working together in one runtime
 
 - time is stored once and reused through the engine API
-- object state changes update transforms and bounds
-- animation updates produce the current skin matrices
-- broad phase reduces the expensive collision work
+- object state updates produce the latest transforms and bounds
+- animation updates produce the latest skin matrices
+- broad phase reduces the collision candidate set
 - narrow phase confirms real convex intersections
-- callbacks mutate live gameplay state
-- rendering consumes the latest transforms and animation state
+- callbacks mutate live object state after confirmed collisions
+- rendering consumes the final state of the same frame
 
-That is what Objective E was asking for
+That is the Objective E requirement in runtime form
 
-It is also why `assignment_1` is the executable you should open when you need to show the assignment working
+## 10 Main Files
+
+- `src/main.cpp`
+  Runtime setup frame loop scene construction and deferred render submission.
+- `src/Engine.cpp`
+  Public API used by the executable.
+- `src/Utility.cpp`
+  Active object storage delta time storage collision broad phase and callback dispatch.
+- `src/SceneGraph.cpp`
+  Render side spatial graph and query path.
+- `src/DeferredRenderer.cpp`
+  Final draw path used by the runtime after simulation work is complete.
