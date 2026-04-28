@@ -13,9 +13,11 @@ This page is organized as a 15 minute presentation outline for explaining the pr
   <a href="#project-thesis">Thesis</a>
   <a href="#project">Project</a>
   <a href="#live-demo-plan">Demo Plan</a>
+  <a href="#demo-catalog">Demos</a>
   <a href="#design-strategy">Design Strategy</a>
   <a href="#code-map">Code Map</a>
   <a href="#engine-loop">Engine Loop</a>
+  <a href="#backend-engine-systems">Backend</a>
   <a href="#command-flow">Commands</a>
   <a href="#rts-simulation">RTS Simulation</a>
   <a href="#graphics">Graphics</a>
@@ -43,15 +45,17 @@ This page is organized as a 15 minute presentation outline for explaining the pr
 | --- | --- | --- |
 | 0:00-0:45 | Project thesis | State the project goal and the main technical claim. |
 | 0:45-1:30 | Project overview | Explain the RTS feature set and why it stresses the engine. |
-| 1:30-3:00 | Live demo | Show unit commands, harvesting/production, combat, fog, and one alternate scenario. |
+| 1:30-2:30 | Live demo | Show unit commands, harvesting/production, combat, fog, and one alternate scenario. |
+| 2:30-3:00 | Demo catalog | Explain why each demo exists and what observation it supports. |
 | 3:00-4:15 | Design strategy | Explain ownership boundaries, data flow, and why the RTS layer is split into subsystems. |
 | 4:15-5:00 | Code map | Point out where the important systems live in the repository. |
-| 5:00-6:00 | Engine workflow | Show how setup, update, simulation, and render submission are separated. |
-| 6:00-7:00 | Command flow | Explain how player input and AI both become validated world orders. |
-| 7:00-8:30 | RTS systems | Explain terrain, orders, pathfinding, combat, economy, buildings, production, fog, and events. |
+| 5:00-5:45 | Engine workflow | Show how setup, update, simulation, and render submission are separated. |
+| 5:45-6:30 | Backend systems | Explain scene graph, BVH, broad-phase filtering, and backend ownership. |
+| 6:30-7:15 | Command flow | Explain how player input and AI both become validated world orders. |
+| 7:15-8:30 | RTS systems | Explain terrain, orders, pathfinding, combat, economy, buildings, production, fog, and events. |
 | 8:30-9:45 | Graphics pipeline | Explain the deferred rendering pass and how animated meshes reach the GPU. |
 | 9:45-10:45 | AI workflow | Explain snapshot-driven team AI, command emission, and replay through normal player command APIs. |
-| 10:45-11:45 | Tools | Explain Blender exporters, mesh discovery, archetype configuration, demo modes, and test targets. |
+| 10:45-11:45 | Tools | Explain Blender exporters, mesh discovery, archetype configuration, demo modes, launcher, and test targets. |
 | 11:45-12:45 | Development approach | Explain how features were added, tested, and deployed into demos. |
 | 12:45-13:45 | Challenges | Explain the main production problems and how the design addressed them. |
 | 13:45-14:30 | Deviations and external tools | Explain what changed from the assignment baseline and what is custom versus external. |
@@ -146,7 +150,8 @@ Recommended 90 second demo path:
 | 5 | Queue production from a building. | Buildings own production queues and rally points. |
 | 6 | Show projectiles, towers, or combat events. | Combat is resolved through projectile state and world events. |
 | 7 | Point out fog or visibility. | AI and UI can be limited by what a team has explored or can currently see. |
-| 8 | Switch to AI battle, siege, pathfinding lab, or stress mode. | Scenario modes isolate specific engine features for testing and presentation. |
+| 8 | Switch to Economy Race or Tool Pipeline if explaining observation demos. | Economy Race isolates harvest/production scaling; Tool Pipeline isolates mesh/animation/render workflow. |
+| 9 | Switch to AI battle, siege, pathfinding lab, or stress mode if explaining stress cases. | Scenario modes isolate specific engine features for testing and presentation. |
 
 Short demo flow:
 
@@ -157,7 +162,7 @@ select units
   -> worker harvest loop
   -> production queue
   -> combat/projectiles
-  -> alternate scenario mode
+  -> economy race or tool pipeline observation demo
 ```
 
 If time is short, prioritize:
@@ -165,7 +170,7 @@ If time is short, prioritize:
 - one player command
 - one economy or production action
 - one combat moment
-- one AI or stress scenario
+- one observation scenario such as Economy Race or Tool Pipeline
 
 <details class="speaker-notes" markdown="1">
 <summary>Detailed speaking notes</summary>
@@ -175,6 +180,58 @@ Use the demo as evidence, not as the whole presentation. Avoid spending too much
 The best phrasing during the demo is "what you are seeing on screen comes from this workflow." For example: the right click does not teleport units. It becomes an order, the world validates it, the pathfinder and steering move units over time, attack-move checks enemies, combat spawns projectiles, and rendering draws the updated snapshots.
 
 Have one fallback path ready. If the demo takes too long, skip building placement and show AI battle or stress mode because those quickly prove the engine can run without constant manual input.
+
+</details>
+
+## Demo Catalog
+
+The demos are not random executables. Each one isolates a specific engine observation so the presentation can show one feature clearly without explaining the entire game every time.
+
+Use `./run_demo.sh` to launch the selector.
+
+| Selector target | Observation goal | What to point out |
+| --- | --- | --- |
+| `assignment_1` | Assignment 3 and 4 showcase. | Managed objects, animation sidecars, collision callbacks, scene graph culling, and deferred lights. |
+| `rts_demo` | Full player-facing RTS demo. | Selection, commands, buildings, economy, production, combat, fog, and AI in one playable scenario. |
+| `rts_mass_battle_demo` | Large battle and movement spectacle. | Many units, formation attack-move orders, multiple routes, crowd spacing, and combat events. |
+| `pathfinding_lab_demo` | Route planning through constrained terrain. | Maze-like blockers, water/rock gates, queued routes, A* pathfinding, and line-of-sight movement. |
+| `building_siege_demo` | Defensive structures and repair pressure. | Towers, repairs, artillery pressure, building health, construction/repair behavior, and combat feedback. |
+| `ai_vs_ai_battle_demo` | Autonomous strategy behavior. | Both teams harvest, produce, scout, attack, retreat, and replay AI commands through normal world APIs. |
+| `economy_race_demo` | Economy and production scaling without combat noise. | Workers harvest/drop off ore, depots and barracks queue units, farms provide supply, and both teams scale. |
+| `rts_stress_test_demo` | High-count simulation load. | 512 units, three lanes, collision/formation pressure, and frame-to-frame order updates. |
+| `tool_pipeline_demo` | Asset/tool/render workflow observation. | `.meshbin` discovery, optional `.animbin` loading, `Shape` creation, animation matrices, scene graph submission, and deferred rendering. |
+| `doom_demo` | Separate gameplay style on the same engine base. | Reusable mesh, renderer, scene graph, sound, and input systems applied outside the RTS format. |
+
+The two newest observation demos cover specific rubric needs:
+
+```text
+Economy Race Demo
+  -> workers
+  -> resource nodes
+  -> dropoff buildings
+  -> team ore balances
+  -> production queues
+  -> supply scaling
+```
+
+```text
+Tool Pipeline Demo
+  -> Blender asset
+  -> meshbin / animbin export
+  -> MeshDiscovery
+  -> MeshLoader / AnimationClip
+  -> RenderCommand
+  -> DeferredRenderer
+```
+
+<details class="speaker-notes" markdown="1">
+<summary>Detailed speaking notes</summary>
+
+This slide explains why there are multiple demos instead of one giant demo. A large RTS scenario is impressive, but it can hide the details. The focused demos are observation tools. They let you point at one subsystem and say, "This is the feature isolated."
+
+For Economy Race, emphasize that combat is intentionally removed from the AI profile. That makes the resource loop easier to observe: workers harvest, return to depots, ore changes, production queues fill, supply matters, and both teams scale over time.
+
+For Tool Pipeline, emphasize that it is not an RTS combat test. It is about the asset-to-render path: exported mesh and animation data come from Blender, the runtime discovers and loads those files, the engine creates renderable shapes, animation sidecars produce matrices when available, and the deferred renderer draws the final scene.
 
 </details>
 
@@ -307,6 +364,102 @@ That separation is useful because player input, AI, tests, and scripted demo set
 
 </details>
 
+## Backend Engine Systems
+
+This project has gameplay-facing systems, but it also has backend engine systems that make the demos practical to run and explain. The most important backend example is the scene graph and BVH spatial query path.
+
+Plain-English version:
+
+- The engine keeps track of where objects are in the world.
+- Instead of asking "does this object interact with every other object?", the backend first asks "which objects are even near this area?"
+- That produces a smaller candidate list.
+- Rendering, collision, and gameplay logic then do the more expensive exact work only on those candidates.
+
+Scene graph and BVH responsibilities:
+
+- `SceneGraph` stores scene objects spatially.
+- It supports broad spatial queries instead of checking every object against every other object.
+- It is used for render-side visibility/culling and collision or broad-phase style queries.
+- It lets the engine separate "find possible objects" from "do final detailed work."
+
+```text
+all objects
+  |
+  v
+BVH partitions world space
+  |
+  +-- query visible region
+  +-- query AABB overlap region
+  |
+  v
+small candidate set
+```
+
+Why BVH matters:
+
+- Without a broad phase, rendering and collision-style checks trend toward checking everything.
+- With a BVH, the engine narrows the list before exact collision, render submission, or gameplay response.
+- This matters more as the scene grows from a few objects into many RTS units, buildings, projectiles, and debug/demo objects.
+
+Backend update flow:
+
+```text
+GameObject transform changes
+  |
+  v
+world bounds refresh
+  |
+  v
+SceneGraph / BVH update
+  |
+  +--> render visibility query
+  |
+  +--> collision candidate query
+  |
+  v
+renderer or collision system handles final work
+```
+
+Backend ownership:
+
+| Backend area | Owner | Job |
+| --- | --- | --- |
+| Transform and bounds | `GameObject` | Stores object transform state and world-space bounds. |
+| Active engine objects | `Utility.cpp` | Owns active managed objects, updates them, and dispatches collision responses. |
+| Spatial partitioning | `SceneGraph.cpp` | Maintains the scene graph/BVH and answers spatial queries. |
+| Rendering backend | `DeferredRenderer.cpp` | Owns G-buffer state, geometry pass, lighting pass, and render command execution. |
+| RTS simulation backend | `RtsWorld.cpp` | Owns RTS-specific mutable state separately from low-level engine object state. |
+
+The design point is that backend systems reduce the amount of work that high-level systems have to do. Gameplay code can ask for meaningful results without manually scanning every object in the world.
+
+<details class="speaker-notes" markdown="1">
+<summary>Detailed speaking notes</summary>
+
+This slide is useful because it proves the project is not only gameplay scripting. A BVH is an engine structure for managing spatial complexity. It does not decide game rules by itself. It helps other systems ask better questions.
+
+For a general audience, compare it to sorting objects into boxes. If you are looking for objects near the camera, you do not inspect the whole world one object at a time. You first inspect the relevant boxes. For a code audience, explain that this is broad-phase filtering: the BVH gives a possible set, and then the renderer or collision logic does the exact work.
+
+Tie it back to the demos. The assignment showcase uses scene queries before render submission. Collision work uses broad-phase candidates before more exact checks. RTS demos benefit from the same backend idea because many units and buildings exist at once.
+
+Code callout:
+
+```text
+SceneGraph::createNode
+  -> sync_scene_graph_with_objects
+  -> SceneGraph::render / queryAabb
+  -> candidate ids
+  -> render submission or collision exact work
+```
+
+Files to mention:
+
+- `src/SceneGraph.cpp`
+- `src/SceneGraph.h`
+- `src/Utility.cpp`
+- `src/main.cpp`
+
+</details>
+
 ## Command Flow
 
 Commands are the bridge between input, AI, and simulation. A mouse click, keyboard shortcut, scripted scenario, or AI decision all become the same kind of world request.
@@ -359,6 +512,24 @@ For non-programmers, describe a command as an instruction card. The player or AI
 For programmers, the key types are `RtsOrder`, `RtsOrderType`, and `RtsAiCommand`. `RtsOrder` is stored on units as active or queued behavior. `RtsAiCommand` is temporary output from the AI. The AI command is converted back into normal `RtsWorld` calls so the AI does not get special privileges.
 
 The command flow also keeps frame updates clean. A right click does not simulate an entire attack. It stores intent. The world update then advances movement, target checks, cooldowns, projectile spawns, and completion over many frames.
+
+Code callout:
+
+```text
+RTSDemo input handling
+  -> RtsWorld::issueOrder
+  -> RtsWorld::issueFormationOrder
+  -> UnitState::active_order / UnitState::order_queue
+  -> RtsWorld::startNextQueuedOrder
+  -> RtsWorld::updateActiveOrder
+```
+
+Important files:
+
+- `demo/RTSDemo.cpp`
+- `src/RtsWorld.cpp`
+- `src/RtsWorld.h`
+- `src/RtsTypes.h`
 
 </details>
 
@@ -463,6 +634,33 @@ The order state machine is the core of unit behavior. Move orders try to reach a
 
 Point out that this is why `RtsWorld::update` is the best single function to explain the engine. It shows the entire simulation pipeline in order. Even if the audience does not know C++, they can understand the idea that the engine repeatedly refreshes visibility, resolves existing combat, accepts new decisions, advances queues, moves units, and cleans up results.
 
+Economy and production code callout:
+
+```text
+worker harvest loop
+  -> RtsWorld::handleHarvestOrder
+  -> RtsEconomySystem::harvestResourceNode
+  -> UnitState::carried_resource_amount
+  -> RtsWorld::addTeamResourceAmount on dropoff
+  -> RtsEventType::resources_deposited
+```
+
+```text
+building production queue
+  -> RtsWorld::enqueueProduction
+  -> RtsProductionSystem::enqueueProduction
+  -> RtsProductionSystem::update
+  -> RtsWorld::spawnProducedUnit
+  -> RtsEventType::production_completed
+```
+
+Good files to open if asked:
+
+- `src/RtsWorld.cpp`
+- `src/RtsEconomy.cpp`
+- `src/RtsProduction.cpp`
+- `src/RtsTypes.h`
+
 </details>
 
 ## Graphics
@@ -543,6 +741,31 @@ The animation workflow still fits into this path. CPU-side animation builds bone
 
 A useful explanation for everyone is: the first graphics pass records what the camera sees, and the second pass decides how light affects it. That is different from a forward renderer where every object is drawn with lighting immediately. This project uses the deferred approach because it demonstrates render-buffer management and makes the light workflow easier to explain.
 
+Deferred renderer code callout:
+
+```text
+DeferredRenderer::beginFrame
+  -> ensureFrameBuffers
+  -> bind G-buffer framebuffer
+  -> geometry pass writes position / normal / albedo
+  -> DeferredRenderer::drawQueue
+  -> lighting pass samples G-buffer
+  -> fullscreen triangle to default framebuffer
+```
+
+Tool pipeline render callout:
+
+```text
+discover_meshbins
+  -> load_mesh_from_meshbin
+  -> load_animation_for_mesh
+  -> Shape / AnimationClip
+  -> RenderItem
+  -> SceneGraph node
+  -> DeferredRenderer::enqueue
+  -> DeferredRenderer::drawQueue
+```
+
 </details>
 
 ## AI
@@ -608,6 +831,26 @@ The AI also demonstrates software development tradeoffs. It is not trying to be 
 
 The phrase "director style AI" is helpful in the presentation. It means the AI is not calculating every footstep for every unit. It decides team-level intent: collect resources, train units, scout, attack, or retreat. Once it issues that intent, the normal movement, pathfinding, and combat code takes over.
 
+AI code callout:
+
+```text
+RtsWorld::update
+  -> build RtsAiFrame
+  -> RtsAiSystem::update
+  -> std::vector<RtsAiCommand>
+  -> switch command.type
+  -> issueHarvestOrder / issueFormationOrder / enqueueProduction
+```
+
+Important types:
+
+- `RtsAiProfile`
+- `RtsAiFrame`
+- `RtsAiCommand`
+- `RtsWorldUnitSnapshot`
+- `RtsWorldBuildingSnapshot`
+- `RtsWorldProductionSnapshot`
+
 </details>
 
 ## Tools
@@ -622,6 +865,7 @@ Custom and project-specific tools created or integrated for the workflow:
 | Archetype registration | Defines unit and building templates from code-level data. | `src/RtsTypes.h`, `demo/RTSDemo.cpp` |
 | RTS world snapshots | Gives UI, renderer, tests, and AI read-only views of world state. | `src/RtsWorld.*` |
 | Demo scenario modes | Runs focused demonstrations for RTS mechanics and stress cases. | `demo/RTSDemo.cpp` |
+| Demo selector | Launches showcase, RTS variants, observation demos, and tool pipeline demo from one terminal menu. | `run_demo.sh` |
 | CMake test targets | Verifies assignment objectives and RTS world behavior. | `CMakeLists.txt`, `tests/*.cpp` |
 
 The workflow for adding content is:
@@ -653,6 +897,8 @@ Practical workflow examples:
 | Add a new unit type | Add or register an `RtsUnitArchetype` with health, speed, cost, production time, vision, role, and combat stats. |
 | Add a new building type | Register an `RtsBuildingArchetype` with footprint, cost, supply, production options, tower stats, or dropoff rules. |
 | Add a scenario | Use `RTSDemo.cpp` setup code to place terrain, blockers, units, buildings, resources, and starting orders. |
+| Observe economy scaling | Launch `economy_race_demo` to watch harvest, dropoff, production queues, and supply without combat pressure. |
+| Observe asset workflow | Launch `tool_pipeline_demo` to watch exported mesh/animation assets become render commands. |
 | Verify behavior | Run focused tests or use scenario modes that isolate pathfinding, battle, siege, AI, or stress behavior. |
 
 <details class="speaker-notes" markdown="1">
@@ -663,6 +909,24 @@ The tool workflow matters because it explains how content reaches the engine. Bl
 The other major tool is the code-level archetype system. Units and buildings are not all hard-coded as one-off objects. Their movement, health, cost, vision, production, combat role, and construction rules are template data copied into runtime state when the unit or building is created.
 
 For an audience that does not know asset pipelines, explain that Blender is where the art is made, the exporter is the translator, and the C++ engine is where the translated asset becomes part of the game. For a programming audience, explain that this keeps authoring format concerns out of the runtime renderer.
+
+The launcher script is also a small tool. It makes the demos easier to present because you do not need to remember every executable name. That matters in a timed presentation: the selector turns the demo set into a usable presentation workflow.
+
+Tool-pipeline code path to mention:
+
+```text
+src/main.cpp
+  -> build_default_showcase_mesh_paths or discover_meshbins
+  -> load_showcase_item
+  -> load_mesh_from_meshbin
+  -> load_animation_for_mesh
+  -> spawnRtsGameObject
+  -> sync_render_item_animation_state
+  -> scene_graph.createNode
+  -> render_showcase_window
+```
+
+This is the clearest code path for explaining how exported assets become visible runtime objects.
 
 </details>
 
@@ -895,6 +1159,7 @@ Final takeaways:
 - Rendering is separated from simulation through snapshots and render commands.
 - Deferred rendering demonstrates render-buffer management and a clearer multi-light workflow.
 - Blender is used as an external authoring tool, but the runtime engine and RTS behavior are custom.
+- Focused demos isolate the main observations: pathfinding, battle load, siege, AI autonomy, economy scaling, and tool pipeline.
 - The documentation site now includes diagrams, a timed presentation outline, slide navigation, and detailed speaking notes.
 
 One-sentence close:

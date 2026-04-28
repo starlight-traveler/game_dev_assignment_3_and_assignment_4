@@ -132,3 +132,4 @@ void FogOfWar::ensureTeamCount(int team_count) {
     team_visibility_.swap(expanded);
     team_count_ = team_count;
 }
+Can

@@ -49,6 +49,8 @@ const char* kDemoWindowTitle = "RTS Pathfinding Lab Demo";
 const char* kDemoWindowTitle = "RTS Building Siege Demo";
 #elif defined(RTS_AI_VS_AI_BATTLE_DEMO)
 const char* kDemoWindowTitle = "RTS AI vs AI Battle Demo";
+#elif defined(RTS_ECONOMY_RACE_DEMO)
+const char* kDemoWindowTitle = "RTS Economy Race Demo";
 #elif defined(RTS_STRESS_TEST_DEMO)
 const char* kDemoWindowTitle = "RTS Stress Test Demo";
 #else
@@ -78,6 +80,12 @@ constexpr bool kAiVsAiBattleDemo =
 #else
     false;
 #endif
+constexpr bool kEconomyRaceDemo =
+#if defined(RTS_ECONOMY_RACE_DEMO)
+    true;
+#else
+    false;
+#endif
 constexpr bool kStressTestDemo =
 #if defined(RTS_STRESS_TEST_DEMO)
     true;
@@ -85,7 +93,12 @@ constexpr bool kStressTestDemo =
     false;
 #endif
 constexpr bool kScenarioVariantDemo =
-    kMassBattleDemo || kPathfindingLabDemo || kBuildingSiegeDemo || kAiVsAiBattleDemo || kStressTestDemo;
+    kMassBattleDemo ||
+    kPathfindingLabDemo ||
+    kBuildingSiegeDemo ||
+    kAiVsAiBattleDemo ||
+    kEconomyRaceDemo ||
+    kStressTestDemo;
 // keep the map large enough for scouting and staging before the first real clash
 constexpr int kWindowWidth = 1280;
 constexpr int kWindowHeight = 720;
@@ -2846,25 +2859,27 @@ void seed_building_siege_scenario(RtsWorld& world, std::vector<std::uint32_t>& b
 
 void configure_ai_vs_ai_profiles(RtsWorld& world) {
     world.setAiProfile(0, RtsAiProfile{
-        0.45f,
-        2,
+        0.35f,
         4,
-        10.0f,
+        7,
+        12.0f,
         true,
         true,
         true,
         kUnitArchetypeWorker,
         {kUnitArchetypePlayerScout,
          kUnitArchetypePlayer,
+         kUnitArchetypePlayer,
          kUnitArchetypePlayerHeavy,
-         kUnitArchetypeWorker,
-         kUnitArchetypePlayer}
+         kUnitArchetypePlayerScout,
+         kUnitArchetypePlayerHeavy,
+         kUnitArchetypeWorker}
     });
     world.setAiProfile(1, RtsAiProfile{
-        0.45f,
-        2,
+        0.35f,
         4,
-        10.0f,
+        7,
+        12.0f,
         true,
         true,
         true,
@@ -2875,6 +2890,7 @@ void configure_ai_vs_ai_profiles(RtsWorld& world) {
          kUnitArchetypeEnemyHeavy,
          kUnitArchetypeEnemyLancer,
          kUnitArchetypeEnemyBrute,
+         kUnitArchetypeEnemyDasher,
          kUnitArchetypeEnemyWorker}
     });
 }
@@ -2883,14 +2899,200 @@ void seed_ai_vs_ai_battle_scenario(RtsWorld& world, std::vector<std::uint32_t>& 
     seed_demo_buildings(world);
     seed_demo_units(world);
     seed_demo_economy(world);
-    world.setTeamResourceAmount(0, "ore", 900);
-    world.setTeamResourceAmount(1, "ore", 900);
+    // This variant is meant to sell autonomy, so both teams get enough opening infrastructure
+    // to harvest, reinforce, scout, and launch multiple attack waves without player help.
+    world.setTeamResourceAmount(0, "ore", 1500);
+    world.setTeamResourceAmount(1, "ore", 1500);
+
+    const auto blue_forward_barracks =
+        world.placeBuildingFromArchetype(0, kBuildingBarracks, GridCoord{22, 94});
+    const auto blue_extra_farm =
+        world.placeBuildingFromArchetype(0, kBuildingFarm, GridCoord{24, 104});
+    const auto blue_base_tower =
+        world.placeBuildingFromArchetype(0, kBuildingTower, GridCoord{26, 97});
+    const auto red_forward_barracks =
+        world.placeBuildingFromArchetype(1, kBuildingBarracks, GridCoord{101, 32});
+    const auto red_extra_farm =
+        world.placeBuildingFromArchetype(1, kBuildingFarm, GridCoord{100, 20});
+    const auto red_base_tower =
+        world.placeBuildingFromArchetype(1, kBuildingTower, GridCoord{98, 28});
+
+    (void)blue_extra_farm;
+    (void)blue_base_tower;
+    (void)red_extra_farm;
+    (void)red_base_tower;
+
+    if (blue_forward_barracks.has_value()) {
+        world.setProductionRallyPoint(blue_forward_barracks.value(),
+                                      world.terrain().cellCenter(GridCoord{34, 88}));
+    }
+    if (red_forward_barracks.has_value()) {
+        world.setProductionRallyPoint(red_forward_barracks.value(),
+                                      world.terrain().cellCenter(GridCoord{94, 40}));
+    }
+
+    std::uint32_t next_blue_id = 1200;
+    std::uint32_t next_red_id = 2200;
+    std::vector<std::uint32_t> blue_opening_scouts{};
+    std::vector<std::uint32_t> red_opening_scouts{};
+    const std::vector<std::pair<GridCoord, std::string>> blue_reinforcements{
+        {GridCoord{20, 103}, kUnitArchetypeWorker},
+        {GridCoord{22, 104}, kUnitArchetypeWorker},
+        {GridCoord{27, 96}, kUnitArchetypePlayerScout},
+        {GridCoord{28, 96}, kUnitArchetypePlayerScout},
+        {GridCoord{29, 96}, kUnitArchetypePlayer},
+        {GridCoord{30, 96}, kUnitArchetypePlayer},
+        {GridCoord{27, 99}, kUnitArchetypePlayerHeavy}
+    };
+    const std::vector<std::pair<GridCoord, std::string>> red_reinforcements{
+        {GridCoord{112, 23}, kUnitArchetypeEnemyWorker},
+        {GridCoord{113, 24}, kUnitArchetypeEnemyWorker},
+        {GridCoord{100, 31}, kUnitArchetypeEnemyScout},
+        {GridCoord{101, 31}, kUnitArchetypeEnemyDasher},
+        {GridCoord{102, 31}, kUnitArchetypeEnemy},
+        {GridCoord{103, 31}, kUnitArchetypeEnemy},
+        {GridCoord{104, 31}, kUnitArchetypeEnemyLancer}
+    };
+    for (const auto& entry : blue_reinforcements) {
+        const std::uint32_t unit_id = next_blue_id++;
+        if (world.addUnitFromArchetype(unit_id, 0, world.terrain().cellCenter(entry.first), entry.second)) {
+            if (entry.second == kUnitArchetypePlayerScout) {
+                blue_opening_scouts.push_back(unit_id);
+            }
+        }
+    }
+    for (const auto& entry : red_reinforcements) {
+        const std::uint32_t unit_id = next_red_id++;
+        if (world.addUnitFromArchetype(unit_id, 1, world.terrain().cellCenter(entry.first), entry.second)) {
+            if (entry.second == kUnitArchetypeEnemyScout || entry.second == kUnitArchetypeEnemyDasher) {
+                red_opening_scouts.push_back(unit_id);
+            }
+        }
+    }
+
+    // Extra visible ore patches make the AI economy loop obvious on both sides and at the contested center.
+    world.addResourceNode("ore", GridCoord{28, 101}, 260);
+    world.addResourceNode("ore", GridCoord{96, 35}, 260);
+    world.addResourceNode("ore", GridCoord{61, 67}, 260);
+    world.addResourceNode("ore", GridCoord{67, 61}, 260);
+
+    if (!blue_opening_scouts.empty()) {
+        world.issueFormationOrder(blue_opening_scouts,
+                                  world.terrain().cellCenter(GridCoord{56, 70}),
+                                  RtsOrderType::attack_move,
+                                  1.0f);
+    }
+    if (!red_opening_scouts.empty()) {
+        world.issueFormationOrder(red_opening_scouts,
+                                  world.terrain().cellCenter(GridCoord{72, 58}),
+                                  RtsOrderType::attack_move,
+                                  1.0f);
+    }
+
     for (const RtsWorldUnitSnapshot& unit : world.unitSnapshots()) {
         if (unit.team == 0) {
             blue_ids.push_back(unit.unit_id);
         }
     }
     configure_ai_vs_ai_profiles(world);
+}
+
+void configure_economy_race_profiles(RtsWorld& world) {
+    world.setAiProfile(0, RtsAiProfile{
+        0.30f,
+        8,
+        99,
+        6.0f,
+        true,
+        true,
+        false,
+        kUnitArchetypeWorker,
+        {kUnitArchetypeWorker,
+         kUnitArchetypePlayerScout,
+         kUnitArchetypePlayer,
+         kUnitArchetypePlayerHeavy}
+    });
+    world.setAiProfile(1, RtsAiProfile{
+        0.30f,
+        8,
+        99,
+        6.0f,
+        true,
+        true,
+        false,
+        kUnitArchetypeEnemyWorker,
+        {kUnitArchetypeEnemyWorker,
+         kUnitArchetypeEnemyScout,
+         kUnitArchetypeEnemy,
+         kUnitArchetypeEnemyHeavy,
+         kUnitArchetypeEnemyDasher}
+    });
+}
+
+void seed_economy_race_scenario(RtsWorld& world, std::vector<std::uint32_t>& blue_ids) {
+    // This observation scenario removes combat pressure and makes resource scaling easy to watch.
+    // Both sides have mirrored bases, workers, production queues, supply buildings, and rich nearby ore.
+    world.setTeamResourceAmount(0, "ore", 520);
+    world.setTeamResourceAmount(1, "ore", 520);
+
+    const auto blue_depot =
+        world.placeBuildingFromArchetype(0, kBuildingDepot, GridCoord{18, 100});
+    const auto blue_barracks =
+        world.placeBuildingFromArchetype(0, kBuildingBarracks, GridCoord{13, 96});
+    world.placeBuildingFromArchetype(0, kBuildingFarm, GridCoord{14, 108});
+    world.placeBuildingFromArchetype(0, kBuildingFarm, GridCoord{24, 104});
+    world.placeBuildingFromArchetype(0, kBuildingFarm, GridCoord{28, 98});
+
+    const auto red_depot =
+        world.placeBuildingFromArchetype(1, kBuildingDepot, GridCoord{106, 26});
+    const auto red_barracks =
+        world.placeBuildingFromArchetype(1, kBuildingBarracks, GridCoord{111, 30});
+    world.placeBuildingFromArchetype(1, kBuildingFarm, GridCoord{110, 18});
+    world.placeBuildingFromArchetype(1, kBuildingFarm, GridCoord{100, 20});
+    world.placeBuildingFromArchetype(1, kBuildingFarm, GridCoord{96, 28});
+
+    if (blue_depot.has_value()) {
+        world.setProductionRallyPoint(blue_depot.value(), world.terrain().cellCenter(GridCoord{25, 101}));
+    }
+    if (blue_barracks.has_value()) {
+        world.setProductionRallyPoint(blue_barracks.value(), world.terrain().cellCenter(GridCoord{30, 94}));
+    }
+    if (red_depot.has_value()) {
+        world.setProductionRallyPoint(red_depot.value(), world.terrain().cellCenter(GridCoord{101, 31}));
+    }
+    if (red_barracks.has_value()) {
+        world.setProductionRallyPoint(red_barracks.value(), world.terrain().cellCenter(GridCoord{95, 37}));
+    }
+
+    world.addResourceNode("ore", GridCoord{23, 94}, 520);
+    world.addResourceNode("ore", GridCoord{32, 106}, 520);
+    world.addResourceNode("ore", GridCoord{28, 101}, 420);
+    world.addResourceNode("ore", GridCoord{102, 32}, 520);
+    world.addResourceNode("ore", GridCoord{114, 42}, 520);
+    world.addResourceNode("ore", GridCoord{96, 35}, 420);
+    world.addResourceNode("ore", GridCoord{54, 58}, 360);
+    world.addResourceNode("ore", GridCoord{78, 74}, 360);
+
+    std::uint32_t next_blue_id = 1300;
+    std::uint32_t next_red_id = 2300;
+    for (int i = 0; i < 5; ++i) {
+        const GridCoord blue_cell{18 + i, 103 + (i % 2)};
+        const std::uint32_t blue_id = next_blue_id++;
+        if (world.addUnitFromArchetype(blue_id,
+                                       0,
+                                       world.terrain().cellCenter(blue_cell),
+                                       kUnitArchetypeWorker)) {
+            blue_ids.push_back(blue_id);
+        }
+
+        const GridCoord red_cell{111 + i, 23 + (i % 2)};
+        world.addUnitFromArchetype(next_red_id++,
+                                   1,
+                                   world.terrain().cellCenter(red_cell),
+                                   kUnitArchetypeEnemyWorker);
+    }
+
+    configure_economy_race_profiles(world);
 }
 
 void seed_stress_test_scenario(RtsWorld& world, std::vector<std::uint32_t>& blue_ids) {
@@ -4740,6 +4942,8 @@ int main() {
         paint_building_siege_layout(world.terrain());
     } else if (kAiVsAiBattleDemo) {
         paint_ai_battle_layout(world.terrain());
+    } else if (kEconomyRaceDemo) {
+        paint_ai_battle_layout(world.terrain());
     } else if (kStressTestDemo) {
         paint_stress_test_layout(world.terrain());
     } else {
@@ -4754,6 +4958,8 @@ int main() {
         seed_building_siege_scenario(world, scenario_blue_ids);
     } else if (kAiVsAiBattleDemo) {
         seed_ai_vs_ai_battle_scenario(world, scenario_blue_ids);
+    } else if (kEconomyRaceDemo) {
+        seed_economy_race_scenario(world, scenario_blue_ids);
     } else if (kStressTestDemo) {
         seed_stress_test_scenario(world, scenario_blue_ids);
     } else {
@@ -4785,6 +4991,9 @@ int main() {
     } else if (kAiVsAiBattleDemo) {
         camera.focus = world.terrain().cellCenter(GridCoord{64, 64});
         camera.zoom = 38.0f;
+    } else if (kEconomyRaceDemo) {
+        camera.focus = world.terrain().cellCenter(GridCoord{64, 64});
+        camera.zoom = 42.0f;
     } else {
         camera.focus = world.terrain().cellCenter(GridCoord{24, 99});
         camera.zoom = kDefaultZoom;
@@ -4854,6 +5063,13 @@ int main() {
             "PRODUCTION AND ATTACKS ENABLED",
             "WATCH ECONOMY ESCALATE"
         };
+    } else if (kEconomyRaceDemo) {
+        director.feed_lines = {
+            "ECONOMY RACE OBSERVATION",
+            "WORKERS HARVEST AND DROPOFF",
+            "DEPOTS AND BARRACKS QUEUE UNITS",
+            "NO AUTO ATTACKS: WATCH SCALING"
+        };
     } else if (kStressTestDemo) {
         director.feed_lines = {
             "STRESS TEST 512 UNITS",
@@ -4878,6 +5094,9 @@ int main() {
     } else if (kAiVsAiBattleDemo) {
         control_log =
             "RTS AI vs AI battle demo: both teams harvest, produce, and attack without player direction. F1 toggles the field manual.";
+    } else if (kEconomyRaceDemo) {
+        control_log =
+            "RTS economy race demo: mirrored AI bases harvest, spend, queue production, and scale without combat pressure. F1 toggles the field manual.";
     } else if (kStressTestDemo) {
         control_log =
             "RTS stress test demo: 512 units collide across three attack lanes. F1 toggles the field manual, 1 recalls the blue swarm.";

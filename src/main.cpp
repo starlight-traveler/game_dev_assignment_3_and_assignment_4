@@ -56,6 +56,13 @@ constexpr float kFormationRadius = 1.1f;
 constexpr float kTitleRefreshIntervalSeconds = 0.2f;
 constexpr std::uint64_t kCollisionResponseCooldownFrames = 16;
 constexpr float kPi = 3.1415926535f;
+#if defined(TOOL_PIPELINE_DEMO)
+const char* kShowcaseWindowTitle = "Tool Pipeline Demo";
+const char* kShowcaseTitlePrefix = "Tool Pipeline Demo";
+#else
+const char* kShowcaseWindowTitle = "Assignment 1 Showcase";
+const char* kShowcaseTitlePrefix = "Assignment 1 Showcase";
+#endif
 
 struct CameraState {
     glm::vec3 position = glm::vec3(0.0f, 4.6f, 9.2f);
@@ -840,7 +847,7 @@ void update_showcase_window_title(SDL_Manager& sdl,
     }
 
     std::ostringstream title;
-    title << "Assignment 1 Showcase | A3 visible " << visible_count << "/" << total_count
+    title << kShowcaseTitlePrefix << " | A3 visible " << visible_count << "/" << total_count
           << " | collisions " << g_showcase_collision_count
           << " | A4 deferred lights 6";
     if (showcase.mode == ScreenMode::rotating_light) {
@@ -921,9 +928,10 @@ int main(int argc, char** argv) {
         LOG_INFO(get_logger(), "Showcase using {} curated meshbin file(s)", mesh_paths.size());
     }
     LOG_INFO(get_logger(),
-             "Showcase controls: WASD/arrow/QE move camera, IJKL look, right click rallies units");
+             "{} controls: WASD/arrow/QE move camera, IJKL look, right click rallies units",
+             kShowcaseTitlePrefix);
 
-    if (!sdl.spawnWindow("Assignment 1 Showcase",
+    if (!sdl.spawnWindow(kShowcaseWindowTitle,
                          kShowcaseWindowWidth,
                          kShowcaseWindowHeight,
                          SDL_TRUE)) {
