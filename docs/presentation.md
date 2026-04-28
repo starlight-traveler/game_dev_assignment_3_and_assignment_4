@@ -1036,7 +1036,6 @@ The hardest part of producing the final product was not one isolated algorithm. 
 | Combat needed visible feedback and clean state changes | Damage, death, projectiles, and tower attacks can happen while units are moving. | `RtsCombatSystem` owns projectile/tower logic while `RtsWorld` applies damage and emits events. |
 | Rendering must not control simulation | Demo drawing code has broad visibility into the scene, but game rules need separate ownership. | Render from snapshots and render commands after simulation finishes. |
 | Large demo file pressure | UI, camera, scenario setup, hotkeys, and overlays create a lot of demo-side code. | Keep core reusable rules in `src/` and treat `RTSDemo.cpp` as the presentation layer. |
-| Fifteen minute scope limit | The project has more systems than can be covered deeply in one presentation. | Use diagrams, a short demo path, and speaker notes to move from overview to code detail. |
 
 The main debugging strategy was to isolate features:
 
