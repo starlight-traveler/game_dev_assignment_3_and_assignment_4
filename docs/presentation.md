@@ -217,10 +217,10 @@ The overall design strategy is to keep the project split into layers that each h
 
 Conceptual summary:
 
-- `RTSDemo` is the stage manager. It handles the window, camera, mouse clicks, keyboard shortcuts, HUD, and which scenario is running.
-- `RtsWorld` is the rulebook. It decides which commands are valid and how the game state changes over time.
-- The subsystem classes are specialists. Terrain knows cells, pathfinding knows routes, combat knows projectiles, economy knows resources, and production knows build queues.
-- The renderer is the camera crew. It does not decide gameplay. It draws the latest state after the world finishes updating.
+- `RTSDemo`: Handles the window, camera, mouse clicks, keyboard shortcuts, HUD, and which scenario is running.
+- `RtsWorld` Decides which commands are valid and how the game state changes over time.
+- Terrain deals with cells, pathfinding deals with routes, combat deals with projectiles, economy deals with resources, and production deals with build queues.
+- The renderer is well, the renderer.
 
 Code-level version:
 
