@@ -45,25 +45,7 @@ This document summarizes the custom RTS engine project, its development challeng
 
 ## Presentation Timeline
 
-| Time | Topic | Main point |
-| --- | --- | --- |
-| 0:00-0:45 | Project thesis | Project goal and main technical claim. |
-| 0:45-1:30 | Project overview | RTS feature set and engine stress points. |
-| 1:30-2:30 | Live demonstration | Unit commands, harvesting/production, combat, fog, and one alternate scenario. |
-| 2:30-3:00 | Demo catalog | Purpose and observation value of each demo. |
-| 3:00-4:15 | Design strategy | Ownership boundaries, data flow, and RTS subsystem separation. |
-| 4:15-5:00 | Code map | Repository locations for the major systems. |
-| 5:00-5:45 | Engine workflow | Separation between setup, update, simulation, and render submission. |
-| 5:45-6:30 | Backend systems | Scene graph, BVH, broad-phase filtering, and backend ownership. |
-| 6:30-7:15 | Command flow | Player input and AI as validated world orders. |
-| 7:15-8:30 | RTS systems | Terrain, orders, pathfinding, combat, economy, buildings, production, fog, and events. |
-| 8:30-9:45 | Graphics pipeline | Deferred rendering and animated mesh submission. |
-| 9:45-10:45 | AI workflow | Snapshot-driven team AI, command emission, and replay through normal player command APIs. |
-| 10:45-11:45 | Tools | Blender exporters, mesh discovery, archetype configuration, demo modes, launcher, and test targets. |
-| 11:45-12:45 | Development approach | Feature implementation, testing, and deployment into demos. |
-| 12:45-13:45 | Challenges | Main production problems and design responses. |
-| 13:45-14:30 | Deviations and external tools | Assignment baseline changes and custom-versus-external boundaries. |
-| 14:30-15:00 | Closing | Summarize what the final product proves. |
+There is nothing here.
 
 <details class="speaker-notes" markdown="1">
 <summary>Speaking Notes</summary>
@@ -72,21 +54,9 @@ The timeline structures the 15 minute technical walkthrough. Each section introd
 
 </details>
 
-## Project Thesis
+## RTS Custom Engine - Project Thesis
 
-This project extends the assignment engine into a custom RTS engine workflow.
-
-The main technical claim:
-
-> The final product demonstrates that the engine can coordinate many independent systems: unit commands, terrain pathfinding, buildings, economy, production, combat, fog of war, team AI, asset tooling, animation, and deferred rendering.
-
-Technical claims:
-
-- the project is not just a one-off demo scene
-- the RTS game behavior is built from reusable engine subsystems
-- player input and AI both use the same command validation path
-- tools and data flow are part of the engine workflow, not separate afterthoughts
-- the final implementation intentionally expands the original assignment features into a larger engine design
+This project extends the assignment engine into a custom RTS engine workflow. It incorproates economny, AI path planning, and further systems that demosntrate the capability of the engine. No attempt was really bad to optimize anything, and mostly focused on getting a game to work, via simple programmer art.
 
 ```text
 assignment engine foundation
