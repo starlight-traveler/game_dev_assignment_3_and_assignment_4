@@ -247,6 +247,50 @@ th {
   font-size: 0.94rem;
 }
 
+.presentation-toc {
+  margin: -0.5rem 0 1.25rem;
+  padding: 12px;
+  border: 1px solid #dbe8f2;
+  border-radius: 10px;
+  background: #f8fbfe;
+}
+
+.presentation-toc strong {
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.presentation-toc ol {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 6px 10px;
+  margin: 0;
+  padding-left: 1.35rem;
+}
+
+.presentation-toc li {
+  padding-left: 0.15rem;
+}
+
+.presentation-toc button {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 4px 7px;
+  color: var(--ink-soft);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.presentation-toc button:hover,
+.presentation-toc button.is-active {
+  color: #fff;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
 .presentation-slide {
   min-height: 540px;
   padding: 4px 2px 18px;
@@ -280,6 +324,65 @@ th {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+body.presentation-fullscreen {
+  overflow: hidden;
+  background: #07111a;
+}
+
+.presentation-fullscreen .site-shell {
+  max-width: none;
+  height: 100vh;
+  padding: 0;
+}
+
+.presentation-fullscreen .site-header,
+.presentation-fullscreen .site-footer,
+.presentation-fullscreen .presentation-tabs {
+  display: none;
+}
+
+.presentation-fullscreen .content-card {
+  height: 100vh;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  padding: 18px clamp(18px, 4vw, 58px) 28px;
+  box-shadow: none;
+}
+
+.presentation-fullscreen .content-card > h1,
+.presentation-fullscreen .content-card > p:first-of-type {
+  display: none;
+}
+
+.presentation-fullscreen .presentation-controls {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: -18px 0 1rem;
+  padding: 10px;
+  border-width: 0 0 1px;
+  border-radius: 0;
+}
+
+.presentation-fullscreen .presentation-toc {
+  position: sticky;
+  top: 56px;
+  z-index: 4;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.presentation-fullscreen .presentation-slide {
+  min-height: calc(100vh - 120px);
+  padding: 10px 0 36px;
+}
+
+.presentation-fullscreen .presentation-slide h2 {
+  margin-top: 0;
+  font-size: clamp(1.7rem, 3vw, 3rem);
 }
 
 .muted {

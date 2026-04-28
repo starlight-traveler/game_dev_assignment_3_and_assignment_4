@@ -39,12 +39,17 @@
     var previousButton = controls.querySelector("[data-prev-slide]");
     var nextButton = controls.querySelector("[data-next-slide]");
     var detailsButton = controls.querySelector("[data-toggle-details]");
+    var tocButton = controls.querySelector("[data-toggle-toc]");
     var allButton = controls.querySelector("[data-toggle-all]");
+    var fullscreenButton = controls.querySelector("[data-toggle-fullscreen]");
     var status = controls.querySelector("[data-slide-status]");
+    var toc = document.querySelector("[data-presentation-toc]");
     var tabLinks = Array.prototype.slice.call(document.querySelectorAll(".presentation-tabs a"));
     var currentIndex = 0;
     var showAll = false;
     var detailsOpen = false;
+    var tocOpen = false;
+    var fullscreenMode = false;
 
     function titleFor(slide) {
       var heading = slide.querySelector("h2");
@@ -63,6 +68,57 @@
           link.removeAttribute("aria-current");
         }
       });
+    }
+
+    function updateToc() {
+      if (!toc) {
+        return;
+      }
+      Array.prototype.slice.call(toc.querySelectorAll("button[data-slide-index]")).forEach(function (button) {
+        var isActive = Number(button.getAttribute("data-slide-index")) === currentIndex && !showAll;
+        button.classList.toggle("is-active", isActive);
+        if (isActive) {
+          button.setAttribute("aria-current", "step");
+        } else {
+          button.removeAttribute("aria-current");
+        }
+      });
+    }
+
+    function buildToc() {
+      if (!toc || !tocButton) {
+        return;
+      }
+      var title = document.createElement("strong");
+      title.textContent = "Slide Table of Contents";
+      toc.appendChild(title);
+
+      var list = document.createElement("ol");
+      slides.forEach(function (slide, index) {
+        var item = document.createElement("li");
+        var button = document.createElement("button");
+        button.type = "button";
+        button.setAttribute("data-slide-index", String(index));
+        button.textContent = titleFor(slide);
+        button.addEventListener("click", function () {
+          goTo(index, true);
+          setToc(false);
+        });
+        item.appendChild(button);
+        list.appendChild(item);
+      });
+      toc.appendChild(list);
+    }
+
+    function setToc(open) {
+      tocOpen = open;
+      if (toc) {
+        toc.hidden = !tocOpen;
+      }
+      if (tocButton) {
+        tocButton.textContent = tocOpen ? "Hide TOC" : "TOC";
+      }
+      updateToc();
     }
 
     function setDetails(open) {
@@ -93,6 +149,7 @@
       }
 
       updateTabs();
+      updateToc();
     }
 
     function goTo(index, updateHash) {
@@ -113,6 +170,39 @@
       controls.scrollIntoView({ block: "start" });
     }
 
+    function setFullscreenMode(open) {
+      fullscreenMode = open;
+      document.body.classList.toggle("presentation-fullscreen", fullscreenMode);
+      if (fullscreenButton) {
+        fullscreenButton.textContent = fullscreenMode ? "Exit Fullscreen" : "Fullscreen";
+      }
+      if (fullscreenMode) {
+        showAll = false;
+        render();
+      }
+      controls.scrollIntoView({ block: "start" });
+    }
+
+    function requestBrowserFullscreen() {
+      var shell = document.querySelector(".site-shell") || document.documentElement;
+      var result;
+      if (document.fullscreenElement) {
+        result = document.exitFullscreen();
+        return result && result.catch ? result : Promise.resolve();
+      }
+      if (shell.requestFullscreen) {
+        result = shell.requestFullscreen();
+        return result && result.catch ? result : Promise.resolve();
+      }
+      return Promise.reject(new Error("Fullscreen API unavailable"));
+    }
+
+    function blurActiveControl() {
+      if (document.activeElement && document.activeElement.blur) {
+        document.activeElement.blur();
+      }
+    }
+
     function findSlideIndexById(id) {
       for (var i = 0; i < slides.length; ++i) {
         if (slides[i].getAttribute("data-slide-id") === id) {
@@ -123,24 +213,55 @@
     }
 
     previousButton.addEventListener("click", function () {
+      blurActiveControl();
       goTo(currentIndex - 1, true);
     });
 
     nextButton.addEventListener("click", function () {
+      blurActiveControl();
       goTo(currentIndex + 1, true);
     });
 
     detailsButton.addEventListener("click", function () {
+      blurActiveControl();
       setDetails(!detailsOpen);
     });
 
+    if (tocButton) {
+      tocButton.addEventListener("click", function () {
+        blurActiveControl();
+        setToc(!tocOpen);
+      });
+    }
+
     allButton.addEventListener("click", function () {
+      blurActiveControl();
       showAll = !showAll;
+      if (showAll && fullscreenMode) {
+        if (document.fullscreenElement && document.exitFullscreen) {
+          document.exitFullscreen();
+        } else {
+          setFullscreenMode(false);
+        }
+      }
       render();
       if (detailsOpen) {
         setDetails(true);
       }
       controls.scrollIntoView({ block: "start" });
+    });
+
+    if (fullscreenButton) {
+      fullscreenButton.addEventListener("click", function () {
+        blurActiveControl();
+        requestBrowserFullscreen().catch(function () {
+          setFullscreenMode(!fullscreenMode);
+        });
+      });
+    }
+
+    document.addEventListener("fullscreenchange", function () {
+      setFullscreenMode(Boolean(document.fullscreenElement));
     });
 
     tabLinks.forEach(function (link) {
@@ -182,9 +303,20 @@
       } else if (event.key.toLowerCase() === "d") {
         event.preventDefault();
         setDetails(!detailsOpen);
+      } else if (event.key.toLowerCase() === "t") {
+        event.preventDefault();
+        setToc(!tocOpen);
+      } else if (event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        requestBrowserFullscreen().catch(function () {
+          setFullscreenMode(!fullscreenMode);
+        });
       } else if (event.key.toLowerCase() === "a") {
         event.preventDefault();
         showAll = !showAll;
+        if (showAll && fullscreenMode) {
+          setFullscreenMode(false);
+        }
         render();
         if (detailsOpen) {
           setDetails(true);
@@ -200,6 +332,8 @@
     }
 
     controls.classList.add("is-ready");
+    buildToc();
+    setToc(false);
     setDetails(false);
     render();
   });
