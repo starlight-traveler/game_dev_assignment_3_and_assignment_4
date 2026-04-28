@@ -1109,8 +1109,6 @@ custom C++ runtime
   +-- RenderCommand
 ```
 
-The key point: Blender helps produce content, but it does not run the game. The game loop, RTS rules, AI decisions, command system, rendering path, and scenario behavior are part of this project.
-
 <details class="speaker-notes" markdown="1">
 <summary>Speaking Notes</summary>
 
