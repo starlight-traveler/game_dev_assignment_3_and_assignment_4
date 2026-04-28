@@ -314,7 +314,7 @@ RtsTypes.h
 
 The demo file is large because it owns interaction and presentation, while the reusable rules live in `src/`.
 
-Explain that `RtsTypes.h` is the vocabulary. It defines what an order is, what an archetype is, what a snapshot is, and what an event looks like. `RtsWorld` uses that vocabulary to implement the rules. `RTSDemo` uses the same vocabulary to build interface behavior and scenario setup.
+`RtsTypes.h` is the vocabulary for the RTS layer. It defines what an order is, what an archetype is, what a snapshot is, and what an event looks like. `RtsWorld` uses that vocabulary to implement the rules. `RTSDemo` uses the same vocabulary to build interface behavior and scenario setup.
 
 This structure keeps the presentation traceable: a visible feature in the demo can be connected directly to the responsible source file.
 
@@ -362,18 +362,18 @@ That structure makes `RtsWorld` the owner of rules and `RTSDemo` the owner of pl
 
 Input does not directly move units. Input becomes commands, commands are validated by the world, and the world update decides what actually happens. After the world is updated, rendering reads snapshots and final transforms.
 
-That separation is useful because player input, AI, tests, and scripted demo setup can all use the same public command layer. It also makes rendering simpler: the renderer does not need to know why a unit moved, only where it ended up and what mesh state it should draw.
+That separation is useful because player input, AI, tests, and scripted demo setup can all use the same public command layer. It also makes rendering simpler: the renderer does not need to know why a unit moved, only where it ended up and what mesh state it draws.
 
 </details>
 
 ## Backend Engine Systems
 
-This project has gameplay-facing systems, but it also has backend engine systems that make the demos practical to run and explain. The most important backend example is the scene graph and BVH spatial query path.
+This project has gameplay-facing systems and backend engine systems that make the demos practical to run and inspect. The most important backend example is the scene graph and BVH spatial query path.
 
 Conceptual summary:
 
 - The engine keeps track of where objects are in the world.
-- Instead of asking "does this object interact with every other object?", the backend first asks "which objects are even near this area?"
+- Instead of testing every object against every other object, the backend first filters for objects near the query area.
 - That produces a smaller candidate list.
 - Rendering, collision, and gameplay logic then do the more expensive exact work only on those candidates.
 
@@ -432,16 +432,16 @@ Backend ownership:
 | Rendering backend | `DeferredRenderer.cpp` | Owns G-buffer state, geometry pass, lighting pass, and render command execution. |
 | RTS simulation backend | `RtsWorld.cpp` | Owns RTS-specific mutable state separately from low-level engine object state. |
 
-The design point is that backend systems reduce the amount of work that high-level systems have to do. Gameplay code can ask for meaningful results without manually scanning every object in the world.
+The design point is that backend systems reduce the amount of work performed by high-level systems. Gameplay code can request meaningful results without manually scanning every object in the world.
 
 <details class="speaker-notes" markdown="1">
 <summary>Speaking Notes</summary>
 
-A BVH is an engine structure for managing spatial complexity. It does not decide game rules by itself. It helps other systems ask better spatial questions.
+A BVH is an engine structure for managing spatial complexity. It does not decide game rules by itself. It supports targeted spatial queries for other systems.
 
 Conceptually, the BVH sorts objects into spatial regions. A render or collision query inspects relevant regions first, rather than scanning the whole world one object at a time. This is broad-phase filtering: the BVH gives a possible set, and then the renderer or collision logic performs exact work.
 
-Tie it back to the demos. The assignment showcase uses scene queries before render submission. Collision work uses broad-phase candidates before more exact checks. RTS demos benefit from the same backend idea because many units and buildings exist at once.
+The assignment showcase uses scene queries before render submission. Collision work uses broad-phase candidates before more exact checks. RTS demos benefit from the same backend idea because many units and buildings exist at once.
 
 Code path:
 
@@ -453,7 +453,7 @@ SceneGraph::createNode
   -> render submission or collision exact work
 ```
 
-Files to mention:
+Relevant files:
 
 - `src/SceneGraph.cpp`
 - `src/SceneGraph.h`
@@ -906,7 +906,7 @@ Practical workflow examples:
 <details class="speaker-notes" markdown="1">
 <summary>Speaking Notes</summary>
 
-The tool workflow matters because it explains how content reaches the engine. Blender is used for authoring, but the runtime is custom. The exporter scripts convert authored geometry and animation into the binary formats the engine can load. `MeshDiscovery` helps the demo find meshes and optional animation sidecars.
+The tool workflow describes how content reaches the engine. Blender is used for authoring, but the runtime is custom. The exporter scripts convert authored geometry and animation into the binary formats the engine can load. `MeshDiscovery` helps the demo find meshes and optional animation sidecars.
 
 The other major tool is the code-level archetype system. Units and buildings are not all hard-coded as one-off objects. Their movement, health, cost, vision, production, combat role, and construction rules are template data copied into runtime state when the unit or building is created.
 
@@ -1057,12 +1057,12 @@ The hardest part of producing the final product was not one isolated algorithm. 
 | --- | --- | --- |
 | Many systems needed the same state | Units, AI, UI, combat, fog, and rendering all care about unit and building state. | Keep authoritative mutable state in `RtsWorld`; expose snapshots for reading. |
 | Player and AI commands could diverge | AI could become unfair or buggy if it bypassed normal rules. | AI emits commands, then `RtsWorld` replays them through the same helpers used by player input. |
-| Pathfinding had to respect terrain and buildings | Units should not walk through blocked terrain or placed structures. | `RtsPathfinder` reads `TerrainGrid` and `BuildingSystem` together. |
+| Pathfinding had to respect terrain and buildings | Units must avoid blocked terrain and placed structures. | `RtsPathfinder` reads `TerrainGrid` and `BuildingSystem` together. |
 | RTS orders last across many frames | Harvest, patrol, guard, attack-move, construction, and repair are not one-frame actions. | Units store active and queued `RtsOrder` data and advance through `updateActiveOrder`. |
 | Combat needed visible feedback and clean state changes | Damage, death, projectiles, and tower attacks can happen while units are moving. | `RtsCombatSystem` owns projectile/tower logic while `RtsWorld` applies damage and emits events. |
-| Rendering should not control simulation | It is tempting to let demo drawing code decide game behavior because it already sees everything. | Render from snapshots and render commands after simulation finishes. |
+| Rendering must not control simulation | Demo drawing code has broad visibility into the scene, but game rules need separate ownership. | Render from snapshots and render commands after simulation finishes. |
 | Large demo file pressure | UI, camera, scenario setup, hotkeys, and overlays create a lot of demo-side code. | Keep core reusable rules in `src/` and treat `RTSDemo.cpp` as the presentation layer. |
-| Explaining scope in 15 minutes | The project has more systems than can be shown deeply in one talk. | Use slides, diagrams, a short demo path, and speaker notes to move from overview to code detail. |
+| Fifteen minute scope limit | The project has more systems than can be covered deeply in one presentation. | Use diagrams, a short demo path, and speaker notes to move from overview to code detail. |
 
 The main debugging strategy was to isolate features:
 
@@ -1081,11 +1081,11 @@ combine it into the full RTS demo
 
 Examples:
 
-- pathfinding can be shown in the pathfinding lab scenario
-- AI can be shown in AI-vs-AI mode
-- mass behavior can be shown in battle or stress scenarios
-- production and economy can be shown through building queues and worker harvest loops
-- rendering can be explained through the G-buffer diagram independently of gameplay
+- pathfinding is isolated in the pathfinding lab scenario
+- AI is isolated in AI-vs-AI mode
+- mass behavior is isolated in battle and stress scenarios
+- production and economy are isolated through building queues and worker harvest loops
+- rendering is described through the G-buffer diagram independently of gameplay
 
 <details class="speaker-notes" markdown="1">
 <summary>Speaking Notes</summary>
