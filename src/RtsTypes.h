@@ -42,6 +42,21 @@ enum class RtsOrderType {
 };
 
 /**
+ * @brief coarse combat role used for the demo counter triangle
+ *
+ * assault beats skirmisher
+ * skirmisher beats artillery
+ * artillery beats assault
+ * worker sits outside the triangle
+ */
+enum class RtsCombatRole {
+    worker,
+    skirmisher,
+    assault,
+    artillery
+};
+
+/**
  * @brief one queued or active command for a unit
  *
  * different fields matter for different order types
@@ -69,6 +84,10 @@ struct RtsOrder {
     std::uint32_t target_resource_node_id = 0;
     // target building for construct repair or focused attack style behavior
     std::uint32_t target_building_id = 0;
+    // persistent slot offset used by formation movement and formation attack movement
+    glm::vec3 formation_offset = glm::vec3(0.0f);
+    // when true the unit keeps its slot offset relative to the current objective center
+    bool preserve_formation = false;
 };
 
 /**
@@ -122,6 +141,8 @@ struct RtsUnitArchetype {
     float harvest_cooldown = 0.0f;
     // fog of war reveal range around the unit
     float vision_range = 5.0f;
+    // counter role used when resolving unit versus unit damage
+    RtsCombatRole combat_role = RtsCombatRole::assault;
 };
 
 /**

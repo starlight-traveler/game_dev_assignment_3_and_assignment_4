@@ -41,22 +41,65 @@
 using namespace std::chrono_literals;
 
 namespace {
-// these constants intentionally keep the whole demo small enough to fit on screen at once
-// the goal is not a huge map
-// the goal is a compact sandbox where selection combat building and ai all stay visible together
+#if defined(RTS_MASS_BATTLE_DEMO)
+const char* kDemoWindowTitle = "RTS Mass Battle Demo";
+#elif defined(RTS_PATHFINDING_LAB_DEMO)
+const char* kDemoWindowTitle = "RTS Pathfinding Lab Demo";
+#elif defined(RTS_BUILDING_SIEGE_DEMO)
+const char* kDemoWindowTitle = "RTS Building Siege Demo";
+#elif defined(RTS_AI_VS_AI_BATTLE_DEMO)
+const char* kDemoWindowTitle = "RTS AI vs AI Battle Demo";
+#elif defined(RTS_STRESS_TEST_DEMO)
+const char* kDemoWindowTitle = "RTS Stress Test Demo";
+#else
+const char* kDemoWindowTitle = "RTS Demo";
+#endif
+constexpr bool kMassBattleDemo =
+#if defined(RTS_MASS_BATTLE_DEMO)
+    true;
+#else
+    false;
+#endif
+constexpr bool kPathfindingLabDemo =
+#if defined(RTS_PATHFINDING_LAB_DEMO)
+    true;
+#else
+    false;
+#endif
+constexpr bool kBuildingSiegeDemo =
+#if defined(RTS_BUILDING_SIEGE_DEMO)
+    true;
+#else
+    false;
+#endif
+constexpr bool kAiVsAiBattleDemo =
+#if defined(RTS_AI_VS_AI_BATTLE_DEMO)
+    true;
+#else
+    false;
+#endif
+constexpr bool kStressTestDemo =
+#if defined(RTS_STRESS_TEST_DEMO)
+    true;
+#else
+    false;
+#endif
+constexpr bool kScenarioVariantDemo =
+    kMassBattleDemo || kPathfindingLabDemo || kBuildingSiegeDemo || kAiVsAiBattleDemo || kStressTestDemo;
+// keep the map large enough for scouting and staging before the first real clash
 constexpr int kWindowWidth = 1280;
 constexpr int kWindowHeight = 720;
-constexpr float kGroundHalfExtent = 18.0f;
-constexpr int kTerrainGridWidth = 24;
-constexpr int kTerrainGridHeight = 24;
+constexpr float kGroundHalfExtent = 96.0f;
+constexpr int kTerrainGridWidth = 128;
+constexpr int kTerrainGridHeight = 128;
 constexpr float kTerrainCellSize = (kGroundHalfExtent * 2.0f) / static_cast<float>(kTerrainGridWidth);
-constexpr float kCameraHeight = 16.0f;
-constexpr float kCameraDistance = 16.0f;
-constexpr float kMinZoom = 4.5f;
-constexpr float kMaxZoom = 14.0f;
-constexpr float kDefaultZoom = 8.5f;
-constexpr float kPanSpeed = 9.0f;
-constexpr float kVisibleCullRadius = 28.0f;
+constexpr float kCameraHeight = 30.0f;
+constexpr float kCameraDistance = 30.0f;
+constexpr float kMinZoom = 6.0f;
+constexpr float kMaxZoom = 46.0f;
+constexpr float kDefaultZoom = 20.0f;
+constexpr float kPanSpeed = 20.0f;
+constexpr float kVisibleCullRadius = 150.0f;
 constexpr float kSelectionDragThreshold = 6.0f;
 constexpr float kFormationSpacing = 1.2f;
 constexpr float kSelectionQueryRadius = 0.8f;
@@ -67,19 +110,34 @@ constexpr std::uint32_t kFirstPlayerUnitId = 1000;
 constexpr std::uint32_t kFirstPlayerWorkerId = 1100;
 constexpr std::uint32_t kFirstEnemyUnitId = 2000;
 constexpr std::uint32_t kFirstEnemyWorkerId = 2100;
+constexpr std::uint32_t kFirstShowcaseUnitId = 3000;
+constexpr std::uint32_t kFirstMassBattleBlueUnitId = 5000;
+constexpr std::uint32_t kFirstMassBattleRedUnitId = 6000;
 
 const char* kUnitArchetypePlayer = "player_infantry";
+const char* kUnitArchetypePlayerScout = "player_scout";
+const char* kUnitArchetypePlayerHeavy = "player_heavy";
 const char* kUnitArchetypeWorker = "player_worker";
 const char* kUnitArchetypeEnemy = "enemy_raider";
+const char* kUnitArchetypeEnemyScout = "enemy_scout";
+const char* kUnitArchetypeEnemyHeavy = "enemy_heavy";
+const char* kUnitArchetypeEnemyDasher = "enemy_dasher";
+const char* kUnitArchetypeEnemyLancer = "enemy_lancer";
+const char* kUnitArchetypeEnemyBrute = "enemy_brute";
 const char* kUnitArchetypeEnemyWorker = "enemy_worker";
 const char* kBuildingFarm = "farm";
 const char* kBuildingDepot = "depot";
+const char* kBuildingBarracks = "barracks";
 const char* kBuildingTower = "tower";
-constexpr GridCoord kPlayerDepotAnchor{8, 9};
-constexpr GridCoord kPlayerFarmAnchor{3, 14};
-constexpr GridCoord kEnemyDepotAnchor{16, 10};
-constexpr GridCoord kEnemyTowerAnchor{13, 9};
-constexpr GridCoord kEnemyFarmAnchor{18, 3};
+constexpr GridCoord kPlayerDepotAnchor{18, 100};
+constexpr GridCoord kPlayerBarracksAnchor{12, 96};
+constexpr GridCoord kPlayerFarmAnchor{14, 108};
+constexpr GridCoord kEnemyDepotAnchor{106, 26};
+constexpr GridCoord kEnemyBarracksAnchor{111, 30};
+constexpr GridCoord kEnemyTowerAnchor{93, 50};
+constexpr GridCoord kEnemyFarmAnchor{110, 18};
+constexpr GridCoord kPlayerForwardTowerAnchor{52, 78};
+constexpr GridCoord kBridgeObjectiveCell{64, 64};
 
 // camera is intentionally simple in this demo
 // it never rotates
@@ -133,6 +191,61 @@ struct BuildModeState {
     bool placement_valid;
 };
 
+// command ui keeps a persistent building selection separate from unit selection
+// and a short lived rally placement mode for production buildings
+struct CommandUiState {
+    std::optional<std::uint32_t> selected_building_id;
+    bool rally_mode;
+    bool patrol_mode;
+    bool guard_mode;
+};
+
+enum class CommandButtonId {
+    attack_move,
+    patrol,
+    guard,
+    stop,
+    hold_position,
+    build_farm,
+    build_depot,
+    build_barracks,
+    build_tower,
+    cancel_build_mode,
+    queue_worker,
+    queue_infantry,
+    queue_scout,
+    queue_heavy,
+    cancel_queue,
+    clear_queue,
+    set_rally,
+    select_idle_worker,
+    select_army,
+    demolish
+};
+
+struct CommandButton {
+    CommandButtonId id;
+    SDL_Rect rect;
+    std::string label;
+    std::string hint;
+    bool enabled;
+    bool active;
+};
+
+struct HudLayout {
+    int screen_w;
+    int screen_h;
+    int status_x;
+    int status_y;
+    int right_x;
+    int right_y;
+    int bottom_y;
+    int selection_x;
+    int command_x;
+    int minimap_x;
+    int minimap_y;
+};
+
 // the world snapshot owns gameplay truth
 // this visual state only keeps client side presentation details like selection facing and bobbing
 struct UnitVisualState {
@@ -149,6 +262,27 @@ struct HudPulseState {
     float resource_flash_timer;
     float production_flash_timer;
     float combat_flash_timer;
+};
+
+struct AlertState {
+    std::string message;
+    float timer;
+    glm::vec3 accent;
+};
+
+struct DemoDirectorState {
+    float elapsed_seconds;
+    bool opening_started;
+    bool forward_tower_started;
+    bool enemy_probe_spawned;
+    bool player_reinforcements_spawned;
+    bool enemy_siege_spawned;
+    bool enemy_elite_spawned;
+    bool final_push_spawned;
+    bool repair_ordered;
+    std::uint32_t next_unit_id;
+    std::optional<std::uint32_t> forward_tower_id;
+    std::vector<std::string> feed_lines;
 };
 
 quill::Logger* get_logger() {
@@ -243,6 +377,21 @@ std::string readable_unit_label(const std::string& archetype_id) {
     if (archetype_id == kUnitArchetypePlayer || archetype_id == kUnitArchetypeEnemy) {
         return "INFANTRY";
     }
+    if (archetype_id == kUnitArchetypePlayerScout || archetype_id == kUnitArchetypeEnemyScout) {
+        return "SCOUT";
+    }
+    if (archetype_id == kUnitArchetypePlayerHeavy || archetype_id == kUnitArchetypeEnemyHeavy) {
+        return "HEAVY";
+    }
+    if (archetype_id == kUnitArchetypeEnemyDasher) {
+        return "DASHER";
+    }
+    if (archetype_id == kUnitArchetypeEnemyLancer) {
+        return "LANCER";
+    }
+    if (archetype_id == kUnitArchetypeEnemyBrute) {
+        return "BRUTE";
+    }
     if (archetype_id == kUnitArchetypeWorker || archetype_id == kUnitArchetypeEnemyWorker) {
         return "WORKER";
     }
@@ -255,6 +404,9 @@ std::string readable_building_label(const std::string& archetype_id) {
     }
     if (archetype_id == kBuildingDepot) {
         return "DEPOT";
+    }
+    if (archetype_id == kBuildingBarracks) {
+        return "BARRACKS";
     }
     if (archetype_id == kBuildingTower) {
         return "TOWER";
@@ -571,6 +723,26 @@ glm::vec3 team_head_color(int team) {
     return team == 0 ? glm::vec3(0.82f, 0.93f, 1.0f) : glm::vec3(1.0f, 0.86f, 0.78f);
 }
 
+glm::vec3 unit_body_color(const RtsWorldUnitSnapshot& unit) {
+    glm::vec3 base = team_color(unit.team);
+    if (unit.archetype_id == kUnitArchetypePlayerScout || unit.archetype_id == kUnitArchetypeEnemyScout) {
+        base = glm::mix(base, glm::vec3(0.32f, 0.92f, 0.58f), 0.45f);
+    } else if (unit.archetype_id == kUnitArchetypePlayerHeavy ||
+               unit.archetype_id == kUnitArchetypeEnemyHeavy) {
+        base = glm::mix(base, glm::vec3(0.82f, 0.58f, 0.24f), 0.50f);
+    } else if (unit.archetype_id == kUnitArchetypeEnemyDasher) {
+        base = glm::mix(base, glm::vec3(0.20f, 1.0f, 0.86f), 0.55f);
+    } else if (unit.archetype_id == kUnitArchetypeEnemyLancer) {
+        base = glm::mix(base, glm::vec3(0.72f, 0.42f, 1.0f), 0.58f);
+    } else if (unit.archetype_id == kUnitArchetypeEnemyBrute) {
+        base = glm::mix(base, glm::vec3(1.0f, 0.42f, 0.18f), 0.46f);
+    } else if (unit.archetype_id == kUnitArchetypeWorker ||
+               unit.archetype_id == kUnitArchetypeEnemyWorker) {
+        base = glm::mix(base, glm::vec3(0.84f, 0.78f, 0.52f), 0.35f);
+    }
+    return base;
+}
+
 glm::vec3 flash_color(const glm::vec3& base_color, float timer_s) {
     if (timer_s <= 0.0f) {
         return base_color;
@@ -678,6 +850,83 @@ std::vector<std::uint32_t> selected_builder_ids(
     return ids;
 }
 
+const RtsWorldUnitSnapshot* find_friendly_unit_at_hit(
+    const std::unordered_map<std::uint32_t, RtsWorldUnitSnapshot>& snapshots,
+    const glm::vec3& world_hit,
+    const std::vector<std::uint32_t>& excluded_ids = {}) {
+    const RtsWorldUnitSnapshot* nearest = nullptr;
+    float nearest_distance = std::numeric_limits<float>::max();
+    for (const auto& entry : snapshots) {
+        const RtsWorldUnitSnapshot& snapshot = entry.second;
+        if (snapshot.team != 0 ||
+            std::find(excluded_ids.begin(), excluded_ids.end(), snapshot.unit_id) != excluded_ids.end()) {
+            continue;
+        }
+        const glm::vec2 delta(snapshot.position.x - world_hit.x, snapshot.position.z - world_hit.z);
+        const float distance = glm::dot(delta, delta);
+        if (distance <= (kSelectionQueryRadius * kSelectionQueryRadius) && distance < nearest_distance) {
+            nearest_distance = distance;
+            nearest = &snapshot;
+        }
+    }
+    return nearest;
+}
+
+int visible_enemy_unit_count(const RtsWorld& world,
+                             const std::vector<RtsWorldUnitSnapshot>& snapshots) {
+    return static_cast<int>(std::count_if(
+        snapshots.begin(),
+        snapshots.end(),
+        [&world](const RtsWorldUnitSnapshot& snapshot) {
+            return snapshot.team != 0 && world.isUnitVisibleToTeam(0, snapshot.unit_id);
+        }));
+}
+
+void select_units_by_ids(std::unordered_map<std::uint32_t, UnitVisualState>& visuals,
+                         const std::unordered_map<std::uint32_t, RtsWorldUnitSnapshot>& snapshots,
+                         const std::vector<std::uint32_t>& ids) {
+    clear_selection(visuals, snapshots);
+    for (const std::uint32_t unit_id : ids) {
+        const auto snapshot_it = snapshots.find(unit_id);
+        if (snapshot_it != snapshots.end() && snapshot_it->second.team == 0) {
+            visuals[unit_id].selected = true;
+        }
+    }
+}
+
+bool select_idle_worker(const RtsWorld& world,
+                        std::unordered_map<std::uint32_t, UnitVisualState>& visuals,
+                        const std::unordered_map<std::uint32_t, RtsWorldUnitSnapshot>& snapshots) {
+    for (const auto& entry : snapshots) {
+        const RtsWorldUnitSnapshot& snapshot = entry.second;
+        const RtsUnitArchetype* archetype = world.findUnitArchetype(snapshot.archetype_id);
+        if (snapshot.team == 0 &&
+            archetype &&
+            archetype->can_harvest &&
+            !snapshot.active_order.has_value() &&
+            !snapshot.holding_position) {
+            select_units_by_ids(visuals, snapshots, {snapshot.unit_id});
+            return true;
+        }
+    }
+    return false;
+}
+
+bool select_player_army(const RtsWorld& world,
+                        std::unordered_map<std::uint32_t, UnitVisualState>& visuals,
+                        const std::unordered_map<std::uint32_t, RtsWorldUnitSnapshot>& snapshots) {
+    std::vector<std::uint32_t> army_ids{};
+    for (const auto& entry : snapshots) {
+        const RtsWorldUnitSnapshot& snapshot = entry.second;
+        const RtsUnitArchetype* archetype = world.findUnitArchetype(snapshot.archetype_id);
+        if (snapshot.team == 0 && (!archetype || !archetype->can_harvest)) {
+            army_ids.push_back(snapshot.unit_id);
+        }
+    }
+    select_units_by_ids(visuals, snapshots, army_ids);
+    return !army_ids.empty();
+}
+
 void sync_units_to_scene_graph(SceneGraph& scene_graph,
                                const std::vector<RtsWorldUnitSnapshot>& snapshots,
                                std::unordered_map<std::uint32_t, UnitVisualState>& visuals) {
@@ -761,7 +1010,7 @@ void apply_selection_box(SceneGraph& scene_graph,
     }
 }
 
-void apply_click_selection(const glm::vec3& world_hit,
+bool apply_click_selection(const glm::vec3& world_hit,
                            const std::unordered_map<std::uint32_t, RtsWorldUnitSnapshot>& snapshots,
                            std::unordered_map<std::uint32_t, UnitVisualState>& visuals,
                            bool additive) {
@@ -787,10 +1036,13 @@ void apply_click_selection(const glm::vec3& world_hit,
     }
     if (nearest) {
         visuals[nearest->unit_id].selected = true;
+        return true;
     }
+    return false;
 }
 
 const RtsWorldUnitSnapshot* find_enemy_unit_at_hit(
+    const RtsWorld& world,
     const std::unordered_map<std::uint32_t, RtsWorldUnitSnapshot>& snapshots,
     const glm::vec3& world_hit) {
     // right click attack targeting reuses the same simple proximity test as selection
@@ -799,7 +1051,7 @@ const RtsWorldUnitSnapshot* find_enemy_unit_at_hit(
     float nearest_distance = std::numeric_limits<float>::max();
     for (const auto& entry : snapshots) {
         const RtsWorldUnitSnapshot& snapshot = entry.second;
-        if (snapshot.team == 0) {
+        if (snapshot.team == 0 || !world.isUnitVisibleToTeam(0, snapshot.unit_id)) {
             continue;
         }
         const glm::vec2 delta(snapshot.position.x - world_hit.x, snapshot.position.z - world_hit.z);
@@ -847,6 +1099,20 @@ std::optional<std::uint32_t> hovered_building_id(SDL_Window* window,
     return building_id_at_hit(terrain, buildings, hit_point);
 }
 
+std::optional<std::uint32_t> friendly_building_id_at_hit(const RtsWorld& world,
+                                                         const glm::vec3& world_hit) {
+    const auto building_id =
+        building_id_at_hit(world.terrain(), world.buildings(), world_hit);
+    if (!building_id.has_value()) {
+        return std::nullopt;
+    }
+    const auto snapshot = world.getBuildingSnapshot(building_id.value());
+    if (!snapshot.has_value() || snapshot->team != 0) {
+        return std::nullopt;
+    }
+    return building_id;
+}
+
 const RtsWorldResourceNodeSnapshot* find_resource_node_at_hit(
     const std::vector<RtsWorldResourceNodeSnapshot>& resource_nodes,
     const glm::vec3& world_hit) {
@@ -865,6 +1131,286 @@ const RtsWorldResourceNodeSnapshot* find_resource_node_at_hit(
     return nearest;
 }
 
+bool point_in_rect(const SDL_Rect& rect, int x, int y) {
+    return x >= rect.x && y >= rect.y &&
+           x < rect.x + rect.w && y < rect.y + rect.h;
+}
+
+HudLayout build_hud_layout(SDL_Window* window) {
+    int screen_w = kWindowWidth;
+    int screen_h = kWindowHeight;
+    if (window) {
+        SDL_GetWindowSize(window, &screen_w, &screen_h);
+    }
+    screen_w = std::max(screen_w, kWindowWidth);
+    screen_h = std::max(screen_h, kWindowHeight);
+
+    HudLayout layout{};
+    layout.screen_w = screen_w;
+    layout.screen_h = screen_h;
+    layout.status_x = 16;
+    layout.status_y = 16;
+    layout.right_x = screen_w - 336;
+    layout.right_y = 16;
+    layout.bottom_y = screen_h - 184;
+    layout.selection_x = 16;
+    layout.command_x = std::max(392, (screen_w - 484) / 2);
+    layout.minimap_x = screen_w - 238;
+    layout.minimap_y = screen_h - 222;
+    return layout;
+}
+
+std::optional<RtsWorldProductionSnapshot> find_production_snapshot(
+    const RtsWorld& world,
+    std::uint32_t building_id) {
+    for (const RtsWorldProductionSnapshot& snapshot : world.productionSnapshots()) {
+        if (snapshot.building_id == building_id) {
+            return snapshot;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<RtsWorldBuildingSnapshot> selected_building_snapshot(
+    const RtsWorld& world,
+    const CommandUiState& command_ui) {
+    if (!command_ui.selected_building_id.has_value()) {
+        return std::nullopt;
+    }
+    const auto snapshot = world.getBuildingSnapshot(command_ui.selected_building_id.value());
+    if (!snapshot.has_value() || snapshot->team != 0) {
+        return std::nullopt;
+    }
+    return snapshot;
+}
+
+void clear_building_selection(CommandUiState& command_ui) {
+    command_ui.selected_building_id.reset();
+    command_ui.rally_mode = false;
+    command_ui.patrol_mode = false;
+    command_ui.guard_mode = false;
+}
+
+void clear_tactical_modes(CommandUiState& command_ui, bool& attack_move_armed) {
+    attack_move_armed = false;
+    command_ui.rally_mode = false;
+    command_ui.patrol_mode = false;
+    command_ui.guard_mode = false;
+}
+
+void activate_build_mode(BuildModeState& build_mode,
+                         CommandUiState& command_ui,
+                         bool& attack_move_armed,
+                         const std::string& archetype_id,
+                         const glm::vec3& color,
+                         float height,
+                         const char* label) {
+    clear_tactical_modes(command_ui, attack_move_armed);
+    build_mode.active = true;
+    build_mode.archetype_id = archetype_id;
+    build_mode.color = color;
+    build_mode.height = height;
+    build_mode.label = label;
+}
+
+void cancel_build_mode(BuildModeState& build_mode) {
+    build_mode.active = false;
+    build_mode.has_preview = false;
+}
+
+std::vector<CommandButton> build_command_buttons(
+    const RtsWorld& world,
+    const std::unordered_map<std::uint32_t, UnitVisualState>& unit_visuals,
+    const std::unordered_map<std::uint32_t, RtsWorldUnitSnapshot>& snapshot_map,
+    const BuildModeState& build_mode,
+    bool attack_move_armed,
+    const CommandUiState& command_ui,
+    const HudLayout& layout) {
+    const int panel_x = layout.command_x;
+    const int panel_y = layout.bottom_y;
+    const int button_w = 108;
+    const int button_h = 34;
+    const int gap = 8;
+    const int start_x = panel_x + 16;
+    const int start_y = panel_y + 44;
+
+    auto make_button = [&](CommandButtonId id,
+                           int column,
+                           int row,
+                           const std::string& label,
+                           const std::string& hint,
+                           bool enabled,
+                           bool active = false) {
+        return CommandButton{
+            id,
+            SDL_Rect{
+                start_x + column * (button_w + gap),
+                start_y + row * (button_h + gap),
+                button_w,
+                button_h
+            },
+            label,
+            hint,
+            enabled,
+            active
+        };
+    };
+
+    const std::vector<std::uint32_t> selected_ids =
+        selected_unit_ids(unit_visuals, snapshot_map);
+    const bool has_selected_units = !selected_ids.empty();
+    const bool has_selected_builders =
+        !selected_builder_ids(world, unit_visuals, snapshot_map).empty();
+    const auto building = selected_building_snapshot(world, command_ui);
+    const auto production =
+        building.has_value() ? find_production_snapshot(world, building->building_id) : std::nullopt;
+
+    std::vector<CommandButton> buttons{};
+    buttons.reserve(12);
+    if (building.has_value() && !has_selected_units) {
+        const bool can_queue_worker =
+            world.canProduceUnitFromBuilding(building->building_id, kUnitArchetypeWorker);
+        const bool can_queue_infantry =
+            world.canProduceUnitFromBuilding(building->building_id, kUnitArchetypePlayer);
+        const bool can_queue_scout =
+            world.canProduceUnitFromBuilding(building->building_id, kUnitArchetypePlayerScout);
+        const bool can_queue_heavy =
+            world.canProduceUnitFromBuilding(building->building_id, kUnitArchetypePlayerHeavy);
+        const bool has_queue = production.has_value() && !production->queue.empty();
+        buttons.push_back(make_button(CommandButtonId::queue_worker,
+                                      0,
+                                      0,
+                                      "WORKER",
+                                      "Q",
+                                      can_queue_worker));
+        buttons.push_back(make_button(CommandButtonId::queue_infantry,
+                                      1,
+                                      0,
+                                      "INFANTRY",
+                                      "E",
+                                      can_queue_infantry));
+        buttons.push_back(make_button(CommandButtonId::queue_scout,
+                                      2,
+                                      0,
+                                      "SCOUT",
+                                      "Z",
+                                      can_queue_scout));
+        buttons.push_back(make_button(CommandButtonId::queue_heavy,
+                                      3,
+                                      0,
+                                      "HEAVY",
+                                      "V",
+                                      can_queue_heavy));
+        buttons.push_back(make_button(CommandButtonId::set_rally,
+                                      0,
+                                      1,
+                                      "SET RALLY",
+                                      "RMB",
+                                      true,
+                                      command_ui.rally_mode));
+        buttons.push_back(make_button(CommandButtonId::cancel_queue,
+                                      1,
+                                      1,
+                                      "CANCEL 1",
+                                      "BKSP",
+                                      has_queue));
+        buttons.push_back(make_button(CommandButtonId::clear_queue,
+                                      2,
+                                      1,
+                                      "CLEAR Q",
+                                      "S+BKSP",
+                                      has_queue));
+        buttons.push_back(make_button(CommandButtonId::demolish,
+                                      3,
+                                      1,
+                                      "DEMOLISH",
+                                      "X",
+                                      true));
+        return buttons;
+    }
+
+    buttons.push_back(make_button(CommandButtonId::attack_move,
+                                  0,
+                                  0,
+                                  "ATTACK",
+                                  "A",
+                                  has_selected_units,
+                                  attack_move_armed));
+    buttons.push_back(make_button(CommandButtonId::patrol,
+                                  1,
+                                  0,
+                                  "PATROL",
+                                  "P",
+                                  has_selected_units,
+                                  command_ui.patrol_mode));
+    buttons.push_back(make_button(CommandButtonId::guard,
+                                  2,
+                                  0,
+                                  "GUARD",
+                                  "G",
+                                  has_selected_units,
+                                  command_ui.guard_mode));
+    buttons.push_back(make_button(CommandButtonId::stop,
+                                  3,
+                                  0,
+                                  "STOP",
+                                  "S",
+                                  has_selected_units));
+    buttons.push_back(make_button(CommandButtonId::hold_position,
+                                  0,
+                                  1,
+                                  "HOLD",
+                                  "H",
+                                  has_selected_units));
+    buttons.push_back(make_button(CommandButtonId::build_farm,
+                                  1,
+                                  1,
+                                  "FARM",
+                                  "B",
+                                  has_selected_builders,
+                                  build_mode.active && build_mode.archetype_id == kBuildingFarm));
+    buttons.push_back(make_button(CommandButtonId::build_depot,
+                                  2,
+                                  1,
+                                  "DEPOT",
+                                  "N",
+                                  has_selected_builders,
+                                  build_mode.active && build_mode.archetype_id == kBuildingDepot));
+    buttons.push_back(make_button(CommandButtonId::build_barracks,
+                                  3,
+                                  1,
+                                  "BARRACKS",
+                                  "C",
+                                  has_selected_builders,
+                                  build_mode.active && build_mode.archetype_id == kBuildingBarracks));
+    buttons.push_back(make_button(CommandButtonId::build_tower,
+                                  0,
+                                  2,
+                                  "TOWER",
+                                  "T",
+                                  has_selected_builders,
+                                  build_mode.active && build_mode.archetype_id == kBuildingTower));
+    buttons.push_back(make_button(CommandButtonId::select_idle_worker,
+                                  1,
+                                  2,
+                                  "IDLE WKR",
+                                  "I",
+                                  true));
+    buttons.push_back(make_button(CommandButtonId::select_army,
+                                  2,
+                                  2,
+                                  "ARMY",
+                                  "M",
+                                  true));
+    buttons.push_back(make_button(CommandButtonId::cancel_build_mode,
+                                  3,
+                                  2,
+                                  "CANCEL",
+                                  "R",
+                                  build_mode.active));
+    return buttons;
+}
+
 void draw_screen_rect(SDL_Window* window,
                       int x,
                       int y,
@@ -876,13 +1422,27 @@ void draw_screen_rect(SDL_Window* window,
         return;
     }
 
-    int width = 1;
-    int height = 1;
-    SDL_GetWindowSize(window, &width, &height);
+    int window_w = 1;
+    int window_h = 1;
+    int drawable_w = 1;
+    int drawable_h = 1;
+    SDL_GetWindowSize(window, &window_w, &window_h);
+    SDL_GL_GetDrawableSize(window, &drawable_w, &drawable_h);
+    window_w = std::max(window_w, 1);
+    window_h = std::max(window_h, 1);
+    drawable_w = std::max(drawable_w, 1);
+    drawable_h = std::max(drawable_h, 1);
+    const float scale_x = static_cast<float>(drawable_w) / static_cast<float>(window_w);
+    const float scale_y = static_cast<float>(drawable_h) / static_cast<float>(window_h);
+    const int scissor_x = static_cast<int>(std::round(static_cast<float>(x) * scale_x));
+    const int scissor_y = static_cast<int>(
+        std::round(static_cast<float>(window_h - (y + h)) * scale_y));
+    const int scissor_w = std::max(1, static_cast<int>(std::ceil(static_cast<float>(w) * scale_x)));
+    const int scissor_h = std::max(1, static_cast<int>(std::ceil(static_cast<float>(h) * scale_y)));
 
     glEnable(GL_SCISSOR_TEST);
     glClearColor(color.r, color.g, color.b, alpha);
-    glScissor(x, height - (y + h), w, h);
+    glScissor(scissor_x, scissor_y, scissor_w, scissor_h);
     glClear(GL_COLOR_BUFFER_BIT);
     glDisable(GL_SCISSOR_TEST);
 }
@@ -902,6 +1462,77 @@ void draw_panel(SDL_Window* window,
     draw_screen_rect(window, x, y, 2, h, accent_color * 0.7f);
     draw_screen_rect(window, x + w - 2, y, 2, h, accent_color * 0.7f);
     draw_screen_rect(window, x, y + h - 2, w, 2, accent_color * 0.55f);
+}
+
+int pixel_text_width(const std::string& text, int scale);
+
+void draw_pixel_text(SDL_Window* window,
+                     int x,
+                     int y,
+                     const std::string& text,
+                     int scale,
+                     const glm::vec3& color,
+                     bool draw_shadow = true);
+
+void draw_pixel_text_fit(SDL_Window* window,
+                         int x,
+                         int y,
+                         const std::string& text,
+                         int preferred_scale,
+                         int max_width,
+                         const glm::vec3& color,
+                         bool draw_shadow = true);
+
+void draw_pixel_text_center_fit(SDL_Window* window,
+                                int center_x,
+                                int y,
+                                const std::string& text,
+                                int preferred_scale,
+                                int max_width,
+                                const glm::vec3& color,
+                                bool draw_shadow = true);
+
+void draw_command_button(SDL_Window* window, const CommandButton& button) {
+    glm::vec3 fill_color(0.12f, 0.15f, 0.18f);
+    glm::vec3 accent_color(0.24f, 0.34f, 0.42f);
+    glm::vec3 text_color(0.84f, 0.90f, 0.95f);
+    if (!button.enabled) {
+        fill_color = glm::vec3(0.07f, 0.09f, 0.10f);
+        accent_color = glm::vec3(0.16f, 0.19f, 0.21f);
+        text_color = glm::vec3(0.36f, 0.40f, 0.43f);
+    } else if (button.active) {
+        fill_color = glm::vec3(0.18f, 0.30f, 0.18f);
+        accent_color = glm::vec3(0.42f, 0.88f, 0.48f);
+        text_color = glm::vec3(0.95f, 0.98f, 0.96f);
+    }
+
+    draw_panel(window,
+               button.rect.x,
+               button.rect.y,
+               button.rect.w,
+               button.rect.h,
+               fill_color,
+               accent_color);
+    const int label_scale = pixel_text_width(button.label, 2) <= button.rect.w - 10 ? 2 : 1;
+    const int label_width = std::min(pixel_text_width(button.label, label_scale), button.rect.w - 10);
+    draw_pixel_text_fit(window,
+                        button.rect.x + (button.rect.w - label_width) / 2,
+                        button.rect.y + 6,
+                        button.label,
+                        label_scale,
+                        button.rect.w - 10,
+                        text_color);
+    if (!button.hint.empty()) {
+        const int hint_width = std::min(pixel_text_width(button.hint, 1), button.rect.w - 10);
+        draw_pixel_text_fit(window,
+                            button.rect.x + (button.rect.w - hint_width) / 2,
+                            button.rect.y + button.rect.h - 12,
+                            button.hint,
+                            1,
+                            button.rect.w - 10,
+                            button.enabled ? glm::vec3(0.72f, 0.80f, 0.86f)
+                                           : glm::vec3(0.30f, 0.34f, 0.36f));
+    }
 }
 
 using GlyphRows = std::array<std::uint8_t, 7>;
@@ -947,7 +1578,11 @@ GlyphRows glyph_rows_for(char character) {
     case ':': return GlyphRows{0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000};
     case '/': return GlyphRows{0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b00000, 0b00000};
     case '-': return GlyphRows{0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000};
+    case '+': return GlyphRows{0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000};
+    case '>': return GlyphRows{0b10000, 0b01000, 0b00100, 0b00010, 0b00100, 0b01000, 0b10000};
+    case '<': return GlyphRows{0b00001, 0b00010, 0b00100, 0b01000, 0b00100, 0b00010, 0b00001};
     case '.': return GlyphRows{0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00110, 0b00110};
+    case ',': return GlyphRows{0b00000, 0b00000, 0b00000, 0b00000, 0b00110, 0b00100, 0b01000};
     case '!': return GlyphRows{0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100};
     case ' ': return GlyphRows{0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000};
     default: return GlyphRows{0b11111, 0b10001, 0b00110, 0b00110, 0b00110, 0b10001, 0b11111};
@@ -967,7 +1602,7 @@ void draw_pixel_text(SDL_Window* window,
                      const std::string& text,
                      int scale,
                      const glm::vec3& color,
-                     bool draw_shadow = true) {
+                     bool draw_shadow) {
     if (!window || scale <= 0 || text.empty()) {
         return;
     }
@@ -1019,6 +1654,64 @@ void draw_pixel_text_right(SDL_Window* window,
                     draw_shadow);
 }
 
+void draw_pixel_text_fit(SDL_Window* window,
+                         int x,
+                         int y,
+                         const std::string& text,
+                         int preferred_scale,
+                         int max_width,
+                         const glm::vec3& color,
+                         bool draw_shadow) {
+    if (!window || text.empty() || max_width <= 0) {
+        return;
+    }
+
+    int scale = std::max(1, preferred_scale);
+    while (scale > 1 && pixel_text_width(text, scale) > max_width) {
+        --scale;
+    }
+
+    std::string visible_text = text;
+    if (pixel_text_width(visible_text, scale) > max_width) {
+        while (!visible_text.empty() &&
+               pixel_text_width(visible_text + "..", scale) > max_width) {
+            visible_text.pop_back();
+        }
+        if (!visible_text.empty()) {
+            visible_text += "..";
+        }
+    }
+
+    draw_pixel_text(window, x, y, visible_text, scale, color, draw_shadow);
+}
+
+void draw_pixel_text_center_fit(SDL_Window* window,
+                                int center_x,
+                                int y,
+                                const std::string& text,
+                                int preferred_scale,
+                                int max_width,
+                                const glm::vec3& color,
+                                bool draw_shadow) {
+    if (!window || text.empty() || max_width <= 0) {
+        return;
+    }
+
+    int scale = std::max(1, preferred_scale);
+    while (scale > 1 && pixel_text_width(text, scale) > max_width) {
+        --scale;
+    }
+    const int text_width = std::min(pixel_text_width(text, scale), max_width);
+    draw_pixel_text_fit(window,
+                        center_x - text_width / 2,
+                        y,
+                        text,
+                        scale,
+                        max_width,
+                        color,
+                        draw_shadow);
+}
+
 void update_hud_pulses(HudPulseState& hud_pulses, const std::vector<RtsEvent>& events, float dt_seconds) {
     // the hud watches world events after simulation each frame
     // timers are reloaded whenever a matching event type appears
@@ -1051,6 +1744,321 @@ void update_hud_pulses(HudPulseState& hud_pulses, const std::vector<RtsEvent>& e
             break;
         default:
             break;
+        }
+    }
+}
+
+void push_alert(AlertState& alert, const std::string& message, const glm::vec3& accent) {
+    alert.message = message;
+    alert.timer = 1.6f;
+    alert.accent = accent;
+}
+
+void push_director_feed(DemoDirectorState& director, const std::string& message) {
+    if (director.feed_lines.empty() || director.feed_lines.front() != message) {
+        director.feed_lines.insert(director.feed_lines.begin(), message);
+    }
+    if (director.feed_lines.size() > 5) {
+        director.feed_lines.resize(5);
+    }
+}
+
+void update_alert(AlertState& alert, float dt_seconds) {
+    alert.timer = std::max(0.0f, alert.timer - dt_seconds);
+    if (alert.timer <= 0.0f) {
+        alert.message.clear();
+    }
+}
+
+std::string production_block_reason(const RtsWorld& world,
+                                    const RtsWorldBuildingSnapshot& building,
+                                    const std::string& unit_archetype_id) {
+    const RtsUnitArchetype* unit_archetype = world.findUnitArchetype(unit_archetype_id);
+    if (!unit_archetype) {
+        return "UNKNOWN UNIT";
+    }
+    if (building.under_construction) {
+        return "BUILDING OFFLINE";
+    }
+    const RtsBuildingArchetype* building_archetype =
+        world.findBuildingArchetype(building.archetype_id);
+    if (!building_archetype ||
+        std::find(building_archetype->producible_unit_archetypes.begin(),
+                  building_archetype->producible_unit_archetypes.end(),
+                  unit_archetype_id) == building_archetype->producible_unit_archetypes.end()) {
+        return "WRONG BUILDING";
+    }
+    if (!world.canAffordCosts(building.team, unit_archetype->cost)) {
+        return "NEED MORE ORE";
+    }
+    return "SUPPLY BLOCKED";
+}
+
+std::optional<std::uint32_t> first_building_id(const RtsWorld& world,
+                                               int team,
+                                               const std::string& archetype_id) {
+    for (const RtsWorldBuildingSnapshot& building : world.buildingSnapshots()) {
+        if (building.team == team &&
+            building.archetype_id == archetype_id &&
+            !building.under_construction) {
+            return building.building_id;
+        }
+    }
+    return std::nullopt;
+}
+
+std::vector<std::uint32_t> unit_ids_for_team(const RtsWorld& world,
+                                             int team,
+                                             const std::string& archetype_id = {}) {
+    std::vector<std::uint32_t> ids{};
+    for (const RtsWorldUnitSnapshot& unit : world.unitSnapshots()) {
+        if (unit.team == team && (archetype_id.empty() || unit.archetype_id == archetype_id)) {
+            ids.push_back(unit.unit_id);
+        }
+    }
+    return ids;
+}
+
+void enqueue_demo_unit(RtsWorld& world,
+                       DemoDirectorState& director,
+                       std::uint32_t building_id,
+                       const std::string& unit_archetype_id) {
+    if (world.enqueueProduction(building_id, unit_archetype_id)) {
+        push_director_feed(director, "QUEUED " + readable_unit_label(unit_archetype_id));
+    }
+}
+
+void spawn_showcase_unit(RtsWorld& world,
+                         DemoDirectorState& director,
+                         int team,
+                         const glm::vec3& position,
+                         const std::string& archetype_id,
+                         std::vector<std::uint32_t>& ids) {
+    const std::uint32_t unit_id = director.next_unit_id++;
+    if (world.addUnitFromArchetype(unit_id, team, position, archetype_id)) {
+        ids.push_back(unit_id);
+    }
+}
+
+void send_showcase_wave(RtsWorld& world,
+                        DemoDirectorState& director,
+                        int team,
+                        const glm::vec3& spawn_anchor,
+                        const glm::vec3& target,
+                        const std::vector<std::string>& archetypes,
+                        float spacing) {
+    std::vector<std::uint32_t> ids{};
+    ids.reserve(archetypes.size());
+    for (std::size_t i = 0; i < archetypes.size(); ++i) {
+        const float x_offset = static_cast<float>(i % 3) * 0.85f;
+        const float z_offset = static_cast<float>(i / 3) * 0.9f;
+        spawn_showcase_unit(world,
+                            director,
+                            team,
+                            spawn_anchor + glm::vec3(x_offset, 0.0f, z_offset),
+                            archetypes[i],
+                            ids);
+    }
+    if (!ids.empty()) {
+        world.issueFormationOrder(ids, target, RtsOrderType::attack_move, spacing);
+    }
+}
+
+void update_demo_event_feed(DemoDirectorState& director, const std::vector<RtsEvent>& events) {
+    for (const RtsEvent& event : events) {
+        switch (event.type) {
+        case RtsEventType::production_completed:
+            push_director_feed(director, "PRODUCTION COMPLETE");
+            break;
+        case RtsEventType::construction_started:
+            push_director_feed(director, "CONSTRUCTION STARTED");
+            break;
+        case RtsEventType::construction_completed:
+            push_director_feed(director, "STRUCTURE ONLINE");
+            break;
+        case RtsEventType::resource_harvested:
+            push_director_feed(director, "WORKERS HARVESTING");
+            break;
+        case RtsEventType::resources_deposited:
+            push_director_feed(director, "ORE DEPOSITED");
+            break;
+        case RtsEventType::tower_fired:
+            push_director_feed(director, "TOWER ENGAGED");
+            break;
+        case RtsEventType::building_destroyed:
+            push_director_feed(director, "BUILDING DESTROYED");
+            break;
+        case RtsEventType::unit_died:
+            push_director_feed(director, "UNIT LOST");
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+void update_demo_director(RtsWorld& world,
+                          DemoDirectorState& director,
+                          AlertState& alert,
+                          float dt_seconds) {
+    director.elapsed_seconds += dt_seconds;
+
+    if (!director.opening_started && director.elapsed_seconds >= 0.35f) {
+        director.opening_started = true;
+        push_director_feed(director, "SHOWCASE DIRECTOR ONLINE");
+        push_alert(alert, "RTS SHOWCASE ONLINE", glm::vec3(0.34f, 0.78f, 0.92f));
+
+        if (const auto depot = first_building_id(world, 0, kBuildingDepot)) {
+            enqueue_demo_unit(world, director, depot.value(), kUnitArchetypeWorker);
+            enqueue_demo_unit(world, director, depot.value(), kUnitArchetypeWorker);
+        }
+        if (const auto barracks = first_building_id(world, 0, kBuildingBarracks)) {
+            enqueue_demo_unit(world, director, barracks.value(), kUnitArchetypePlayerScout);
+            enqueue_demo_unit(world, director, barracks.value(), kUnitArchetypePlayer);
+            enqueue_demo_unit(world, director, barracks.value(), kUnitArchetypePlayerHeavy);
+        }
+
+        const std::vector<std::uint32_t> workers =
+            unit_ids_for_team(world, 0, kUnitArchetypeWorker);
+        const std::vector<RtsWorldResourceNodeSnapshot> nodes = world.resourceNodeSnapshots();
+        for (std::size_t i = 0; i < workers.size() && i < nodes.size(); ++i) {
+            world.issueHarvestOrder(workers[i], nodes[i].node_id);
+        }
+
+        const std::vector<std::uint32_t> scouts =
+            unit_ids_for_team(world, 0, kUnitArchetypePlayerScout);
+        if (!scouts.empty()) {
+            world.issueOrder(scouts.front(), RtsOrder{
+                RtsOrderType::patrol,
+                world.terrain().cellCenter(GridCoord{36, 92}),
+                world.terrain().cellCenter(GridCoord{22, 101}),
+                0,
+                0.0f,
+                0.16f
+            });
+        }
+    }
+
+    if (!director.forward_tower_started && director.elapsed_seconds >= 18.0f) {
+        director.forward_tower_started = true;
+        const std::vector<std::uint32_t> workers =
+            unit_ids_for_team(world, 0, kUnitArchetypeWorker);
+        if (!workers.empty()) {
+            director.forward_tower_id =
+                world.startBuildingConstruction(0,
+                                                kBuildingTower,
+                                                kPlayerForwardTowerAnchor,
+                                                workers.front(),
+                                                true);
+            if (director.forward_tower_id.has_value()) {
+                push_director_feed(director, "FORWARD TOWER PLACED");
+                push_alert(alert, "FORWARD TOWER STARTED", glm::vec3(0.42f, 0.86f, 0.50f));
+            }
+        }
+    }
+
+    if (!director.enemy_probe_spawned && director.elapsed_seconds >= 35.0f) {
+        director.enemy_probe_spawned = true;
+        send_showcase_wave(world,
+                           director,
+                           1,
+                           world.terrain().cellCenter(GridCoord{118, 42}),
+                           world.terrain().cellCenter(kBridgeObjectiveCell),
+                           {kUnitArchetypeEnemyScout,
+                            kUnitArchetypeEnemyDasher,
+                            kUnitArchetypeEnemy,
+                            kUnitArchetypeEnemy,
+                            kUnitArchetypeEnemyWorker},
+                           1.1f);
+        push_director_feed(director, "ENEMY PROBE ENTERED FOG");
+        push_alert(alert, "ENEMY PROBE INBOUND", glm::vec3(0.92f, 0.34f, 0.28f));
+    }
+
+    if (!director.player_reinforcements_spawned && director.elapsed_seconds >= 48.0f) {
+        director.player_reinforcements_spawned = true;
+        send_showcase_wave(world,
+                           director,
+                           0,
+                           world.terrain().cellCenter(GridCoord{5, 116}),
+                           world.terrain().cellCenter(GridCoord{50, 78}),
+                           {kUnitArchetypePlayerScout,
+                            kUnitArchetypePlayer,
+                            kUnitArchetypePlayer,
+                            kUnitArchetypePlayerHeavy},
+                           1.2f);
+        push_director_feed(director, "BLUE REINFORCEMENTS ARRIVED");
+        push_alert(alert, "REINFORCEMENTS ARRIVED", glm::vec3(0.34f, 0.78f, 0.92f));
+    }
+
+    if (!director.enemy_siege_spawned && director.elapsed_seconds >= 68.0f) {
+        director.enemy_siege_spawned = true;
+        send_showcase_wave(world,
+                           director,
+                           1,
+                           world.terrain().cellCenter(GridCoord{121, 35}),
+                           world.terrain().cellCenter(GridCoord{52, 78}),
+                           {kUnitArchetypeEnemyHeavy,
+                            kUnitArchetypeEnemy,
+                            kUnitArchetypeEnemyLancer,
+                            kUnitArchetypeEnemyScout,
+                            kUnitArchetypeEnemy,
+                            kUnitArchetypeEnemyBrute,
+                            kUnitArchetypeEnemyHeavy},
+                           1.25f);
+        push_director_feed(director, "ENEMY SIEGE WAVE LAUNCHED");
+        push_alert(alert, "SIEGE WAVE LAUNCHED", glm::vec3(0.92f, 0.34f, 0.28f));
+    }
+
+    if (!director.enemy_elite_spawned && director.elapsed_seconds >= 88.0f) {
+        director.enemy_elite_spawned = true;
+        send_showcase_wave(world,
+                           director,
+                           1,
+                           world.terrain().cellCenter(GridCoord{118, 54}),
+                           world.terrain().cellCenter(GridCoord{43, 88}),
+                           {kUnitArchetypeEnemyDasher,
+                            kUnitArchetypeEnemyDasher,
+                            kUnitArchetypeEnemyLancer,
+                            kUnitArchetypeEnemyBrute},
+                           1.35f);
+        push_director_feed(director, "ELITE ENEMY PACK SPOTTED");
+        push_alert(alert, "ELITE ENEMY PACK", glm::vec3(0.86f, 0.36f, 0.92f));
+    }
+
+    if (!director.final_push_spawned && director.elapsed_seconds >= 115.0f) {
+        director.final_push_spawned = true;
+        send_showcase_wave(world,
+                           director,
+                           1,
+                           world.terrain().cellCenter(GridCoord{122, 30}),
+                           world.terrain().cellCenter(kPlayerDepotAnchor),
+                           {kUnitArchetypeEnemyScout,
+                            kUnitArchetypeEnemyDasher,
+                            kUnitArchetypeEnemy,
+                            kUnitArchetypeEnemy,
+                            kUnitArchetypeEnemyLancer,
+                            kUnitArchetypeEnemyHeavy,
+                            kUnitArchetypeEnemyBrute,
+                            kUnitArchetypeEnemyHeavy,
+                            kUnitArchetypeEnemyWorker},
+                           1.3f);
+        push_director_feed(director, "FINAL ASSAULT IN MOTION");
+        push_alert(alert, "FINAL ASSAULT", glm::vec3(0.92f, 0.34f, 0.28f));
+    }
+
+    if (!director.repair_ordered && director.forward_tower_id.has_value()) {
+        const auto tower = world.getBuildingSnapshot(director.forward_tower_id.value());
+        if (tower.has_value() &&
+            !tower->under_construction &&
+            tower->health < tower->max_health * 0.82f) {
+            const std::vector<std::uint32_t> workers =
+                unit_ids_for_team(world, 0, kUnitArchetypeWorker);
+            if (!workers.empty() &&
+                world.issueRepairOrder(workers.front(), director.forward_tower_id.value())) {
+                director.repair_ordered = true;
+                push_director_feed(director, "WORKER REPAIR ORDERED");
+                push_alert(alert, "REPAIR CREW MOVING", glm::vec3(0.42f, 0.86f, 0.50f));
+            }
         }
     }
 }
@@ -1098,6 +2106,29 @@ void flatten_circle_zone(TerrainGrid& terrain,
     }
 }
 
+void paint_road_segment(TerrainGrid& terrain,
+                        const GridCoord& start,
+                        const GridCoord& end,
+                        int half_width,
+                        float elevation_target) {
+    const int steps = std::max(std::abs(end.x - start.x), std::abs(end.y - start.y));
+    if (steps <= 0) {
+        flatten_circle_zone(terrain, start, half_width, TerrainType::road, elevation_target);
+        return;
+    }
+
+    for (int step = 0; step <= steps; ++step) {
+        const float t = static_cast<float>(step) / static_cast<float>(steps);
+        const int center_x = static_cast<int>(std::round(lerp_scalar(static_cast<float>(start.x),
+                                                                     static_cast<float>(end.x),
+                                                                     t)));
+        const int center_y = static_cast<int>(std::round(lerp_scalar(static_cast<float>(start.y),
+                                                                     static_cast<float>(end.y),
+                                                                     t)));
+        flatten_circle_zone(terrain, GridCoord{center_x, center_y}, half_width, TerrainType::road, elevation_target);
+    }
+}
+
 void paint_demo_terrain(TerrainGrid& terrain) {
     // generate a slightly more organic battlefield with a river spine,
     // higher rocky ridges, and clustered forests while keeping clear lanes for play
@@ -1128,16 +2159,17 @@ void paint_demo_terrain(TerrainGrid& terrain) {
     // carve a wavy river that forces a bridge fight near the center
     for (int y = 0; y < terrain.height(); ++y) {
         const float river_center =
-            11.0f + std::sin(static_cast<float>(y) * 0.34f + 0.8f) * 2.1f +
-            std::sin(static_cast<float>(y) * 0.12f + 2.2f) * 0.9f;
+            static_cast<float>(kBridgeObjectiveCell.x) +
+            std::sin(static_cast<float>(y) * 0.11f + 0.8f) * 5.2f +
+            std::sin(static_cast<float>(y) * 0.035f + 2.2f) * 2.4f;
         for (int x = 0; x < terrain.width(); ++x) {
             const float distance = std::fabs(static_cast<float>(x) - river_center);
-            if (distance > 1.15f || (y >= 10 && y <= 12)) {
+            if (distance > 2.35f || std::abs(y - kBridgeObjectiveCell.y) <= 3) {
                 continue;
             }
             const GridCoord cell{x, y};
             terrain.setTerrainType(cell, TerrainType::water);
-            terrain.setElevation(cell, -0.18f - (1.15f - distance) * 0.05f);
+            terrain.setElevation(cell, -0.18f - (2.35f - distance) * 0.04f);
         }
     }
 
@@ -1156,7 +2188,11 @@ void paint_demo_terrain(TerrainGrid& terrain) {
             const float forest_noise = fbm_noise(nx * 7.4f + 1.3f, ny * 7.4f + 8.1f);
             const float rock_noise = fbm_noise(nx * 6.0f - 4.8f, ny * 6.0f + 11.4f);
             const float local_height = terrain.elevation(cell);
-            const bool in_center_lane = std::abs(y - 11) <= 2 || std::abs(x - 11) <= 1;
+            const bool in_center_lane =
+                std::abs(y - kBridgeObjectiveCell.y) <= 5 ||
+                std::abs(x - kBridgeObjectiveCell.x) <= 4 ||
+                (x < 36 && y > 86) ||
+                (x > 92 && y < 42);
 
             if (!in_center_lane && rock_noise > 0.72f && local_height > 0.03f) {
                 terrain.setTerrainType(cell, TerrainType::rock);
@@ -1168,35 +2204,137 @@ void paint_demo_terrain(TerrainGrid& terrain) {
         }
     }
 
-    // lay down broad roads between the two bases and across the bridge
-    for (int x = 0; x < terrain.width(); ++x) {
-        for (int y = 10; y <= 12; ++y) {
-            terrain.setTerrainType(GridCoord{x, y}, TerrainType::road);
-            terrain.setElevation(GridCoord{x, y}, lerp_scalar(terrain.elevation(GridCoord{x, y}), 0.02f, 0.85f));
-        }
-    }
-    for (int y = 7; y <= 14; ++y) {
-        for (int x = 8; x <= 10; ++x) {
-            terrain.setTerrainType(GridCoord{x, y}, TerrainType::road);
-            terrain.setElevation(GridCoord{x, y}, lerp_scalar(terrain.elevation(GridCoord{x, y}), 0.02f, 0.85f));
-        }
-    }
-    for (int y = 8; y <= 15; ++y) {
-        for (int x = 15; x <= 17; ++x) {
-            terrain.setTerrainType(GridCoord{x, y}, TerrainType::road);
-            terrain.setElevation(GridCoord{x, y}, lerp_scalar(terrain.elevation(GridCoord{x, y}), 0.02f, 0.85f));
-        }
-    }
+    // lay down broad roads between the two bases and across the central bridge
+    paint_road_segment(terrain, GridCoord{20, 101}, GridCoord{34, 92}, 2, 0.02f);
+    paint_road_segment(terrain, GridCoord{34, 92}, GridCoord{50, 78}, 2, 0.02f);
+    paint_road_segment(terrain, GridCoord{50, 78}, kBridgeObjectiveCell, 3, 0.02f);
+    paint_road_segment(terrain, kBridgeObjectiveCell, GridCoord{82, 52}, 3, 0.02f);
+    paint_road_segment(terrain, GridCoord{82, 52}, GridCoord{105, 31}, 2, 0.02f);
+    paint_road_segment(terrain, GridCoord{20, 101}, GridCoord{14, 108}, 2, 0.03f);
+    paint_road_segment(terrain, GridCoord{105, 31}, GridCoord{112, 19}, 2, 0.03f);
+    paint_road_segment(terrain, GridCoord{40, 68}, GridCoord{86, 82}, 1, 0.035f);
+    flatten_circle_zone(terrain, kBridgeObjectiveCell, 6, TerrainType::road, 0.015f);
 
     // reserve playable courtyards around fixed building and resource sites
     flatten_rect_zone(terrain, kPlayerDepotAnchor, 3, 2, 2, TerrainType::road, 0.03f);
+    flatten_rect_zone(terrain, kPlayerBarracksAnchor, 3, 2, 1, TerrainType::road, 0.04f);
     flatten_rect_zone(terrain, kPlayerFarmAnchor, 2, 2, 1, TerrainType::grass, 0.05f);
+    flatten_rect_zone(terrain, kPlayerForwardTowerAnchor, 2, 2, 1, TerrainType::road, 0.04f);
     flatten_rect_zone(terrain, kEnemyDepotAnchor, 3, 2, 2, TerrainType::road, 0.03f);
+    flatten_rect_zone(terrain, kEnemyBarracksAnchor, 3, 2, 1, TerrainType::road, 0.04f);
     flatten_rect_zone(terrain, kEnemyTowerAnchor, 2, 2, 1, TerrainType::road, 0.05f);
     flatten_rect_zone(terrain, kEnemyFarmAnchor, 2, 2, 1, TerrainType::grass, 0.05f);
-    flatten_circle_zone(terrain, GridCoord{5, 7}, 2, TerrainType::grass, 0.06f);
-    flatten_circle_zone(terrain, GridCoord{18, 14}, 2, TerrainType::grass, 0.06f);
-    flatten_circle_zone(terrain, GridCoord{11, 5}, 2, TerrainType::grass, 0.08f);
+    flatten_circle_zone(terrain, GridCoord{23, 94}, 3, TerrainType::grass, 0.06f);
+    flatten_circle_zone(terrain, GridCoord{32, 106}, 3, TerrainType::grass, 0.06f);
+    flatten_circle_zone(terrain, GridCoord{102, 32}, 3, TerrainType::grass, 0.06f);
+    flatten_circle_zone(terrain, GridCoord{114, 42}, 3, TerrainType::grass, 0.06f);
+    flatten_circle_zone(terrain, GridCoord{54, 58}, 3, TerrainType::grass, 0.08f);
+    flatten_circle_zone(terrain, GridCoord{78, 74}, 3, TerrainType::grass, 0.08f);
+    flatten_circle_zone(terrain, GridCoord{43, 88}, 3, TerrainType::grass, 0.08f);
+    flatten_circle_zone(terrain, GridCoord{88, 44}, 3, TerrainType::grass, 0.08f);
+}
+
+void paint_mass_battle_layout(TerrainGrid& terrain) {
+    // This target is about pathing and combat spectacle, so it layers extra battle lanes
+    // over the normal map while keeping the same river, bridge, forests, and ridges.
+    paint_demo_terrain(terrain);
+
+    paint_road_segment(terrain, GridCoord{18, 82}, GridCoord{40, 68}, 3, 0.025f);
+    paint_road_segment(terrain, GridCoord{40, 68}, GridCoord{62, 58}, 2, 0.025f);
+    paint_road_segment(terrain, GridCoord{62, 58}, GridCoord{90, 42}, 3, 0.025f);
+    paint_road_segment(terrain, GridCoord{90, 42}, GridCoord{112, 34}, 3, 0.025f);
+
+    paint_road_segment(terrain, GridCoord{28, 112}, GridCoord{48, 96}, 3, 0.03f);
+    paint_road_segment(terrain, GridCoord{48, 96}, GridCoord{74, 90}, 2, 0.03f);
+    paint_road_segment(terrain, GridCoord{74, 90}, GridCoord{100, 74}, 3, 0.03f);
+    paint_road_segment(terrain, GridCoord{100, 74}, GridCoord{118, 56}, 3, 0.03f);
+
+    paint_road_segment(terrain, GridCoord{30, 94}, GridCoord{50, 82}, 2, 0.02f);
+    paint_road_segment(terrain, GridCoord{76, 54}, GridCoord{98, 42}, 2, 0.02f);
+    flatten_circle_zone(terrain, GridCoord{52, 82}, 5, TerrainType::road, 0.025f);
+    flatten_circle_zone(terrain, GridCoord{76, 54}, 5, TerrainType::road, 0.025f);
+    flatten_circle_zone(terrain, kBridgeObjectiveCell, 8, TerrainType::road, 0.015f);
+
+    flatten_rect_zone(terrain, GridCoord{14, 80}, 18, 10, 2, TerrainType::road, 0.04f);
+    flatten_rect_zone(terrain, GridCoord{18, 92}, 22, 14, 2, TerrainType::road, 0.04f);
+    flatten_rect_zone(terrain, GridCoord{30, 86}, 10, 7, 2, TerrainType::road, 0.04f);
+    flatten_rect_zone(terrain, GridCoord{26, 108}, 22, 10, 2, TerrainType::road, 0.04f);
+    flatten_rect_zone(terrain, GridCoord{94, 22}, 22, 10, 2, TerrainType::road, 0.04f);
+    flatten_rect_zone(terrain, GridCoord{88, 34}, 24, 12, 2, TerrainType::road, 0.04f);
+    flatten_rect_zone(terrain, GridCoord{82, 50}, 26, 12, 2, TerrainType::road, 0.04f);
+}
+
+void paint_pathfinding_lab_layout(TerrainGrid& terrain) {
+    paint_demo_terrain(terrain);
+
+    for (int y = 36; y <= 96; y += 10) {
+        for (int x = 28; x <= 100; ++x) {
+            if ((x >= 58 && x <= 68) || (x >= 84 && x <= 90)) {
+                continue;
+            }
+            const GridCoord cell{x, y};
+            if (!terrain.isValidCell(cell)) {
+                continue;
+            }
+            terrain.setTerrainType(cell, TerrainType::rock);
+            terrain.setElevation(cell, 0.18f);
+        }
+    }
+
+    for (int x = 40; x <= 94; x += 14) {
+        for (int y = 34; y <= 100; ++y) {
+            if ((y >= 58 && y <= 68) || (y >= 82 && y <= 88)) {
+                continue;
+            }
+            const GridCoord cell{x, y};
+            if (!terrain.isValidCell(cell)) {
+                continue;
+            }
+            terrain.setTerrainType(cell, TerrainType::water);
+            terrain.setElevation(cell, -0.16f);
+        }
+    }
+
+    paint_road_segment(terrain, GridCoord{18, 102}, GridCoord{34, 90}, 2, 0.02f);
+    paint_road_segment(terrain, GridCoord{34, 90}, GridCoord{58, 88}, 2, 0.02f);
+    paint_road_segment(terrain, GridCoord{58, 88}, GridCoord{64, 64}, 2, 0.02f);
+    paint_road_segment(terrain, GridCoord{64, 64}, GridCoord{90, 58}, 2, 0.02f);
+    paint_road_segment(terrain, GridCoord{90, 58}, GridCoord{112, 34}, 2, 0.02f);
+    flatten_circle_zone(terrain, GridCoord{18, 102}, 6, TerrainType::road, 0.03f);
+    flatten_circle_zone(terrain, GridCoord{112, 34}, 6, TerrainType::road, 0.03f);
+    flatten_circle_zone(terrain, GridCoord{64, 64}, 7, TerrainType::road, 0.02f);
+}
+
+void paint_building_siege_layout(TerrainGrid& terrain) {
+    paint_demo_terrain(terrain);
+    flatten_rect_zone(terrain, GridCoord{30, 82}, 24, 20, 3, TerrainType::road, 0.03f);
+    flatten_rect_zone(terrain, GridCoord{22, 94}, 18, 14, 2, TerrainType::road, 0.03f);
+    flatten_rect_zone(terrain, GridCoord{76, 38}, 34, 24, 3, TerrainType::road, 0.03f);
+    paint_road_segment(terrain, GridCoord{48, 88}, GridCoord{64, 64}, 3, 0.02f);
+    paint_road_segment(terrain, GridCoord{64, 64}, GridCoord{86, 52}, 3, 0.02f);
+    paint_road_segment(terrain, GridCoord{58, 98}, GridCoord{82, 72}, 2, 0.025f);
+}
+
+void paint_ai_battle_layout(TerrainGrid& terrain) {
+    paint_mass_battle_layout(terrain);
+    flatten_rect_zone(terrain, GridCoord{12, 92}, 18, 18, 3, TerrainType::road, 0.03f);
+    flatten_rect_zone(terrain, GridCoord{98, 18}, 18, 18, 3, TerrainType::road, 0.03f);
+}
+
+void paint_stress_test_layout(TerrainGrid& terrain) {
+    for (int y = 0; y < terrain.height(); ++y) {
+        for (int x = 0; x < terrain.width(); ++x) {
+            const GridCoord cell{x, y};
+            terrain.setTerrainType(cell, TerrainType::grass);
+            terrain.setElevation(cell, (cell_noise(x, y) - 0.5f) * 0.035f);
+        }
+    }
+    flatten_rect_zone(terrain, GridCoord{8, 18}, 44, 92, 2, TerrainType::road, 0.02f);
+    flatten_rect_zone(terrain, GridCoord{76, 18}, 44, 92, 2, TerrainType::road, 0.02f);
+    paint_road_segment(terrain, GridCoord{50, 32}, GridCoord{78, 32}, 5, 0.02f);
+    paint_road_segment(terrain, GridCoord{50, 64}, GridCoord{78, 64}, 6, 0.02f);
+    paint_road_segment(terrain, GridCoord{50, 96}, GridCoord{78, 96}, 5, 0.02f);
+    flatten_circle_zone(terrain, GridCoord{64, 64}, 12, TerrainType::road, 0.02f);
 }
 
 void register_demo_archetypes(RtsWorld& world) {
@@ -1206,19 +2344,58 @@ void register_demo_archetypes(RtsWorld& world) {
     // workers are weaker but can harvest and carry ore
     world.registerUnitArchetype(kUnitArchetypePlayer, RtsUnitArchetype{
         2.65f, 0.36f, 4.2f, 1.5f, 2.1f, 100.0f, 14.0f, 0.7f, 8.5f,
-        {RtsResourceCost{"ore", 60}}, 1.2f, 1, false, 0, 0, 0.0f, 5.5f
+        {RtsResourceCost{"ore", 60}}, 1.2f, 1, false, 0, 0, 0.0f, 5.5f,
+        RtsCombatRole::assault
+    });
+    world.registerUnitArchetype(kUnitArchetypePlayerScout, RtsUnitArchetype{
+        3.25f, 0.30f, 5.2f, 1.6f, 1.6f, 64.0f, 9.0f, 0.48f, 10.0f,
+        {RtsResourceCost{"ore", 45}}, 0.85f, 1, false, 0, 0, 0.0f, 7.0f,
+        RtsCombatRole::skirmisher
+    });
+    world.registerUnitArchetype(kUnitArchetypePlayerHeavy, RtsUnitArchetype{
+        1.90f, 0.42f, 4.0f, 1.7f, 3.0f, 145.0f, 25.0f, 1.25f, 6.0f,
+        {RtsResourceCost{"ore", 115}}, 1.95f, 2, false, 0, 0, 0.0f, 4.8f,
+        RtsCombatRole::artillery
     });
     world.registerUnitArchetype(kUnitArchetypeWorker, RtsUnitArchetype{
         2.45f, 0.34f, 2.8f, 1.4f, 1.0f, 72.0f, 6.0f, 1.1f, 6.8f,
-        {RtsResourceCost{"ore", 50}}, 1.0f, 1, true, 20, 5, 0.35f, 4.5f
+        {RtsResourceCost{"ore", 50}}, 1.0f, 1, true, 20, 5, 0.35f, 4.5f,
+        RtsCombatRole::worker
     });
     world.registerUnitArchetype(kUnitArchetypeEnemy, RtsUnitArchetype{
         2.15f, 0.36f, 4.8f, 1.5f, 1.9f, 100.0f, 11.0f, 0.9f, 7.5f,
-        {}, 0.0f, 0, false, 0, 0, 0.0f, 5.0f
+        {RtsResourceCost{"ore", 55}}, 1.2f, 1, false, 0, 0, 0.0f, 5.0f,
+        RtsCombatRole::assault
+    });
+    world.registerUnitArchetype(kUnitArchetypeEnemyScout, RtsUnitArchetype{
+        3.05f, 0.30f, 5.4f, 1.6f, 1.5f, 60.0f, 8.0f, 0.52f, 9.5f,
+        {RtsResourceCost{"ore", 40}}, 0.85f, 1, false, 0, 0, 0.0f, 7.0f,
+        RtsCombatRole::skirmisher
+    });
+    world.registerUnitArchetype(kUnitArchetypeEnemyHeavy, RtsUnitArchetype{
+        1.80f, 0.42f, 4.2f, 1.7f, 2.9f, 135.0f, 22.0f, 1.35f, 5.8f,
+        {RtsResourceCost{"ore", 105}}, 1.95f, 2, false, 0, 0, 0.0f, 4.8f,
+        RtsCombatRole::artillery
+    });
+    world.registerUnitArchetype(kUnitArchetypeEnemyDasher, RtsUnitArchetype{
+        3.75f, 0.28f, 6.2f, 1.2f, 1.35f, 46.0f, 6.0f, 0.32f, 11.5f,
+        {RtsResourceCost{"ore", 35}}, 0.70f, 1, false, 0, 0, 0.0f, 8.8f,
+        RtsCombatRole::skirmisher
+    });
+    world.registerUnitArchetype(kUnitArchetypeEnemyLancer, RtsUnitArchetype{
+        1.55f, 0.34f, 6.8f, 2.0f, 4.25f, 76.0f, 30.0f, 1.55f, 13.5f,
+        {RtsResourceCost{"ore", 95}}, 1.70f, 2, false, 0, 0, 0.0f, 6.0f,
+        RtsCombatRole::artillery
+    });
+    world.registerUnitArchetype(kUnitArchetypeEnemyBrute, RtsUnitArchetype{
+        1.35f, 0.52f, 3.8f, 1.2f, 1.3f, 210.0f, 18.0f, 1.05f, 6.5f,
+        {RtsResourceCost{"ore", 120}}, 2.20f, 3, false, 0, 0, 0.0f, 4.4f,
+        RtsCombatRole::assault
     });
     world.registerUnitArchetype(kUnitArchetypeEnemyWorker, RtsUnitArchetype{
         2.25f, 0.34f, 2.8f, 1.4f, 1.0f, 68.0f, 5.0f, 1.15f, 6.4f,
-        {RtsResourceCost{"ore", 45}}, 1.0f, 1, true, 20, 5, 0.35f, 5.0f
+        {RtsResourceCost{"ore", 45}}, 1.0f, 1, true, 20, 5, 0.35f, 5.0f,
+        RtsCombatRole::worker
     });
 
     world.registerBuildingArchetype(kBuildingFarm, RtsBuildingArchetype{
@@ -1231,7 +2408,7 @@ void register_demo_archetypes(RtsWorld& world) {
         0.0f,
         {RtsResourceCost{"ore", 70}},
         {},
-        4,
+        6,
         false,
         350.0f,
         1.8f,
@@ -1247,13 +2424,38 @@ void register_demo_archetypes(RtsWorld& world) {
         0.0f,
         0.0f,
         {RtsResourceCost{"ore", 110}},
-        {kUnitArchetypeWorker, kUnitArchetypePlayer, kUnitArchetypeEnemyWorker, kUnitArchetypeEnemy},
+        {kUnitArchetypeWorker, kUnitArchetypeEnemyWorker},
         8,
         true,
         350.0f,
         2.8f,
         28.0f,
         8.0f
+    });
+    world.registerBuildingArchetype(kBuildingBarracks, RtsBuildingArchetype{
+        BuildingDefinition{3, 2, true, true},
+        true,
+        false,
+        0.0f,
+        0.0f,
+        0.0f,
+        0.0f,
+        {RtsResourceCost{"ore", 130}},
+        {kUnitArchetypePlayer,
+         kUnitArchetypePlayerScout,
+         kUnitArchetypePlayerHeavy,
+         kUnitArchetypeEnemy,
+         kUnitArchetypeEnemyScout,
+         kUnitArchetypeEnemyHeavy,
+         kUnitArchetypeEnemyDasher,
+         kUnitArchetypeEnemyLancer,
+         kUnitArchetypeEnemyBrute},
+        0,
+        false,
+        420.0f,
+        3.2f,
+        28.0f,
+        7.0f
     });
     world.registerBuildingArchetype(kBuildingTower, RtsBuildingArchetype{
         BuildingDefinition{2, 2, true, true},
@@ -1280,6 +2482,7 @@ std::vector<BuildingStyle> build_building_styles() {
     return {
         BuildingStyle{kBuildingFarm, glm::vec3(0.72f, 0.64f, 0.28f), 0.75f, "Farm"},
         BuildingStyle{kBuildingDepot, glm::vec3(0.52f, 0.41f, 0.28f), 1.08f, "Depot"},
+        BuildingStyle{kBuildingBarracks, glm::vec3(0.45f, 0.34f, 0.58f), 1.18f, "Barracks"},
         BuildingStyle{kBuildingTower, glm::vec3(0.41f, 0.40f, 0.46f), 1.45f, "Tower"}
     };
 }
@@ -1289,66 +2492,455 @@ void seed_demo_buildings(RtsWorld& world) {
     // a road lane to contest
     // and one early defensive tower for the enemy side
     const auto player_depot = world.placeBuildingFromArchetype(0, kBuildingDepot, kPlayerDepotAnchor);
+    const auto player_barracks =
+        world.placeBuildingFromArchetype(0, kBuildingBarracks, kPlayerBarracksAnchor);
     world.placeBuildingFromArchetype(0, kBuildingFarm, kPlayerFarmAnchor);
     const auto enemy_depot = world.placeBuildingFromArchetype(1, kBuildingDepot, kEnemyDepotAnchor);
+    const auto enemy_barracks =
+        world.placeBuildingFromArchetype(1, kBuildingBarracks, kEnemyBarracksAnchor);
     world.placeBuildingFromArchetype(1, kBuildingTower, kEnemyTowerAnchor);
     world.placeBuildingFromArchetype(1, kBuildingFarm, kEnemyFarmAnchor);
 
     if (player_depot.has_value()) {
-        world.setProductionRallyPoint(player_depot.value(), world.terrain().cellCenter(GridCoord{11, 11}));
+        world.setProductionRallyPoint(player_depot.value(), world.terrain().cellCenter(GridCoord{25, 96}));
+    }
+    if (player_barracks.has_value()) {
+        world.setProductionRallyPoint(player_barracks.value(), world.terrain().cellCenter(GridCoord{31, 92}));
     }
     if (enemy_depot.has_value()) {
-        world.setProductionRallyPoint(enemy_depot.value(), world.terrain().cellCenter(GridCoord{14, 11}));
+        world.setProductionRallyPoint(enemy_depot.value(), world.terrain().cellCenter(GridCoord{101, 34}));
+    }
+    if (enemy_barracks.has_value()) {
+        world.setProductionRallyPoint(enemy_barracks.value(), world.terrain().cellCenter(GridCoord{96, 38}));
     }
 }
 
 void seed_demo_units(RtsWorld& world) {
     // blue team starts with a modest army and two workers so the player can immediately move fight and harvest
     for (std::uint32_t i = 0; i < 6; ++i) {
-        const float x = -5.5f + static_cast<float>(i % 4) * 1.1f;
-        const float z = 4.5f + static_cast<float>(i / 4) * 1.2f;
+        const GridCoord cell{
+            22 + static_cast<int>(i % 4),
+            97 + static_cast<int>(i / 4)
+        };
         world.addUnitFromArchetype(kFirstPlayerUnitId + i,
                                    0,
-                                   glm::vec3(x, 0.0f, z),
+                                   world.terrain().cellCenter(cell),
                                    kUnitArchetypePlayer);
     }
+    world.addUnitFromArchetype(kFirstPlayerUnitId + 20,
+                               0,
+                               world.terrain().cellCenter(GridCoord{21, 99}),
+                               kUnitArchetypePlayerScout);
+    world.addUnitFromArchetype(kFirstPlayerUnitId + 21,
+                               0,
+                               world.terrain().cellCenter(GridCoord{25, 99}),
+                               kUnitArchetypePlayerHeavy);
 
     for (std::uint32_t i = 0; i < 2; ++i) {
-        const float x = -7.4f + static_cast<float>(i) * 1.0f;
-        const float z = 7.1f;
+        const GridCoord cell{
+            18 + static_cast<int>(i),
+            104
+        };
         world.addUnitFromArchetype(kFirstPlayerWorkerId + i,
                                    0,
-                                   glm::vec3(x, 0.0f, z),
+                                   world.terrain().cellCenter(cell),
                                    kUnitArchetypeWorker);
     }
 
     // red team starts smaller but the ai will grow it through production and harvesting
     for (std::uint32_t i = 0; i < 4; ++i) {
-        const float x = 4.5f + static_cast<float>(i % 4) * 1.0f;
-        const float z = -5.5f + static_cast<float>(i / 4) * 1.25f;
+        const GridCoord cell{
+            101 + static_cast<int>(i % 4),
+            34 + static_cast<int>(i / 4)
+        };
         world.addUnitFromArchetype(kFirstEnemyUnitId + i,
                                    1,
-                                   glm::vec3(x, 0.0f, z),
+                                   world.terrain().cellCenter(cell),
                                    kUnitArchetypeEnemy);
     }
+    world.addUnitFromArchetype(kFirstEnemyUnitId + 20,
+                               1,
+                               world.terrain().cellCenter(GridCoord{100, 36}),
+                               kUnitArchetypeEnemyScout);
+    world.addUnitFromArchetype(kFirstEnemyUnitId + 21,
+                               1,
+                               world.terrain().cellCenter(GridCoord{105, 35}),
+                               kUnitArchetypeEnemyHeavy);
+    world.addUnitFromArchetype(kFirstEnemyUnitId + 22,
+                               1,
+                               world.terrain().cellCenter(GridCoord{101, 38}),
+                               kUnitArchetypeEnemyDasher);
+    world.addUnitFromArchetype(kFirstEnemyUnitId + 23,
+                               1,
+                               world.terrain().cellCenter(GridCoord{106, 33}),
+                               kUnitArchetypeEnemyLancer);
+    world.addUnitFromArchetype(kFirstEnemyUnitId + 24,
+                               1,
+                               world.terrain().cellCenter(GridCoord{108, 35}),
+                               kUnitArchetypeEnemyBrute);
 
     world.addUnitFromArchetype(kFirstEnemyWorkerId,
                                1,
-                               glm::vec3(8.5f, 0.0f, -6.6f),
+                               world.terrain().cellCenter(GridCoord{111, 24}),
                                kUnitArchetypeEnemyWorker);
 }
 
 void seed_demo_economy(RtsWorld& world) {
     // both teams start with some ore so production and building can happen immediately
     // resource nodes form one safe cluster per side plus one contested bridge-side cluster
-    world.setTeamResourceAmount(0, "ore", 240);
-    world.setTeamResourceAmount(1, "ore", 70);
-    world.addResourceNode("ore", GridCoord{5, 6}, 180);
-    world.addResourceNode("ore", GridCoord{5, 8}, 160);
-    world.addResourceNode("ore", GridCoord{11, 5}, 200);
-    world.addResourceNode("ore", GridCoord{12, 5}, 180);
-    world.addResourceNode("ore", GridCoord{18, 14}, 190);
-    world.addResourceNode("ore", GridCoord{19, 14}, 170);
+    world.setTeamResourceAmount(0, "ore", 620);
+    world.setTeamResourceAmount(1, "ore", 460);
+    world.addResourceNode("ore", GridCoord{23, 94}, 180);
+    world.addResourceNode("ore", GridCoord{32, 106}, 160);
+    world.addResourceNode("ore", GridCoord{54, 58}, 220);
+    world.addResourceNode("ore", GridCoord{78, 74}, 200);
+    world.addResourceNode("ore", GridCoord{43, 88}, 190);
+    world.addResourceNode("ore", GridCoord{88, 44}, 190);
+    world.addResourceNode("ore", GridCoord{102, 32}, 190);
+    world.addResourceNode("ore", GridCoord{114, 42}, 170);
+}
+
+struct MassBattleForceSpec {
+    GridCoord anchor;
+    int columns;
+    int count;
+    std::vector<std::string> archetypes;
+    std::vector<GridCoord> route;
+};
+
+void spawn_mass_battle_force(RtsWorld& world,
+                             int team,
+                             std::uint32_t& next_unit_id,
+                             const MassBattleForceSpec& spec,
+                             std::vector<std::uint32_t>& spawned_ids) {
+    std::vector<std::uint32_t> group_ids{};
+    group_ids.reserve(static_cast<std::size_t>(spec.count));
+    for (int index = 0; index < spec.count; ++index) {
+        const GridCoord cell{
+            spec.anchor.x + (index % spec.columns),
+            spec.anchor.y + (index / spec.columns)
+        };
+        if (!world.terrain().isValidCell(cell) || spec.archetypes.empty()) {
+            continue;
+        }
+        const std::string& archetype = spec.archetypes[static_cast<std::size_t>(index) %
+                                                       spec.archetypes.size()];
+        const std::uint32_t unit_id = next_unit_id++;
+        if (world.addUnitFromArchetype(unit_id, team, world.terrain().cellCenter(cell), archetype)) {
+            group_ids.push_back(unit_id);
+            spawned_ids.push_back(unit_id);
+        }
+    }
+
+    if (group_ids.empty() || spec.route.empty()) {
+        return;
+    }
+
+    for (std::size_t i = 0; i < spec.route.size(); ++i) {
+        world.issueFormationOrder(group_ids,
+                                  world.terrain().cellCenter(spec.route[i]),
+                                  RtsOrderType::attack_move,
+                                  1.05f,
+                                  i > 0);
+    }
+}
+
+void seed_mass_battle_units(RtsWorld& world, std::vector<std::uint32_t>& blue_ids) {
+    std::uint32_t next_blue_id = kFirstMassBattleBlueUnitId;
+    std::uint32_t next_red_id = kFirstMassBattleRedUnitId;
+    std::vector<std::uint32_t> red_ids{};
+
+    const std::vector<MassBattleForceSpec> blue_forces{
+        MassBattleForceSpec{
+            GridCoord{20, 96},
+            6,
+            24,
+            {kUnitArchetypePlayer, kUnitArchetypePlayer, kUnitArchetypePlayerScout, kUnitArchetypePlayerHeavy},
+            {GridCoord{42, 88}, GridCoord{58, 74}, kBridgeObjectiveCell, GridCoord{82, 52}, GridCoord{104, 36}}
+        },
+        MassBattleForceSpec{
+            GridCoord{15, 82},
+            5,
+            20,
+            {kUnitArchetypePlayerScout, kUnitArchetypePlayer, kUnitArchetypePlayerScout, kUnitArchetypePlayer},
+            {GridCoord{40, 68}, GridCoord{62, 58}, GridCoord{90, 42}, GridCoord{112, 34}}
+        },
+        MassBattleForceSpec{
+            GridCoord{29, 111},
+            5,
+            20,
+            {kUnitArchetypePlayer, kUnitArchetypePlayerHeavy, kUnitArchetypePlayer, kUnitArchetypePlayerScout},
+            {GridCoord{48, 96}, GridCoord{74, 90}, GridCoord{100, 74}, GridCoord{118, 56}}
+        },
+        MassBattleForceSpec{
+            GridCoord{20, 103},
+            6,
+            18,
+            {kUnitArchetypePlayerHeavy, kUnitArchetypePlayer, kUnitArchetypePlayerHeavy},
+            {GridCoord{50, 82}, kBridgeObjectiveCell, GridCoord{76, 54}, GridCoord{98, 42}}
+        },
+        MassBattleForceSpec{
+            GridCoord{31, 88},
+            6,
+            18,
+            {kUnitArchetypePlayer, kUnitArchetypePlayer, kUnitArchetypePlayerScout, kUnitArchetypePlayerHeavy},
+            {GridCoord{52, 82}, GridCoord{64, 64}, GridCoord{76, 54}, GridCoord{94, 46}}
+        }
+    };
+
+    const std::vector<MassBattleForceSpec> red_forces{
+        MassBattleForceSpec{
+            GridCoord{94, 35},
+            6,
+            24,
+            {kUnitArchetypeEnemy, kUnitArchetypeEnemy, kUnitArchetypeEnemyDasher, kUnitArchetypeEnemyHeavy},
+            {GridCoord{82, 52}, kBridgeObjectiveCell, GridCoord{58, 74}, GridCoord{42, 88}, GridCoord{22, 100}}
+        },
+        MassBattleForceSpec{
+            GridCoord{98, 24},
+            5,
+            20,
+            {kUnitArchetypeEnemyScout, kUnitArchetypeEnemyDasher, kUnitArchetypeEnemy, kUnitArchetypeEnemyLancer},
+            {GridCoord{90, 42}, GridCoord{62, 58}, GridCoord{40, 68}, GridCoord{18, 82}}
+        },
+        MassBattleForceSpec{
+            GridCoord{86, 53},
+            5,
+            20,
+            {kUnitArchetypeEnemy, kUnitArchetypeEnemyBrute, kUnitArchetypeEnemy, kUnitArchetypeEnemyHeavy},
+            {GridCoord{100, 74}, GridCoord{74, 90}, GridCoord{48, 96}, GridCoord{28, 112}}
+        },
+        MassBattleForceSpec{
+            GridCoord{103, 39},
+            6,
+            18,
+            {kUnitArchetypeEnemyLancer, kUnitArchetypeEnemyHeavy, kUnitArchetypeEnemy},
+            {GridCoord{76, 54}, kBridgeObjectiveCell, GridCoord{50, 82}, GridCoord{30, 94}}
+        },
+        MassBattleForceSpec{
+            GridCoord{88, 45},
+            6,
+            18,
+            {kUnitArchetypeEnemyBrute, kUnitArchetypeEnemy, kUnitArchetypeEnemyDasher, kUnitArchetypeEnemyLancer},
+            {GridCoord{76, 54}, GridCoord{64, 64}, GridCoord{52, 82}, GridCoord{34, 92}}
+        }
+    };
+
+    for (const MassBattleForceSpec& force : blue_forces) {
+        spawn_mass_battle_force(world, 0, next_blue_id, force, blue_ids);
+    }
+    for (const MassBattleForceSpec& force : red_forces) {
+        spawn_mass_battle_force(world, 1, next_red_id, force, red_ids);
+    }
+}
+
+void seed_mass_battle_scenario(RtsWorld& world, std::vector<std::uint32_t>& blue_ids) {
+    world.setTeamResourceAmount(0, "ore", 0);
+    world.setTeamResourceAmount(1, "ore", 0);
+    world.addResourceNode("ore", GridCoord{54, 58}, 220);
+    world.addResourceNode("ore", GridCoord{78, 74}, 200);
+    world.addResourceNode("ore", GridCoord{43, 88}, 190);
+    world.addResourceNode("ore", GridCoord{88, 44}, 190);
+    seed_mass_battle_units(world, blue_ids);
+}
+
+void seed_pathfinding_lab_scenario(RtsWorld& world, std::vector<std::uint32_t>& blue_ids) {
+    std::uint32_t next_blue_id = 7000;
+    std::uint32_t next_red_id = 7600;
+    const std::vector<MassBattleForceSpec> blue_forces{
+        MassBattleForceSpec{
+            GridCoord{16, 99},
+            4,
+            12,
+            {kUnitArchetypePlayerScout, kUnitArchetypePlayer, kUnitArchetypePlayerHeavy},
+            {GridCoord{34, 90}, GridCoord{58, 88}, GridCoord{64, 64}, GridCoord{90, 58}, GridCoord{112, 34}}
+        },
+        MassBattleForceSpec{
+            GridCoord{17, 105},
+            4,
+            12,
+            {kUnitArchetypePlayer, kUnitArchetypePlayerScout, kUnitArchetypePlayer},
+            {GridCoord{36, 96}, GridCoord{58, 88}, GridCoord{64, 64}, GridCoord{88, 50}, GridCoord{110, 30}}
+        }
+    };
+    for (const MassBattleForceSpec& force : blue_forces) {
+        spawn_mass_battle_force(world, 0, next_blue_id, force, blue_ids);
+    }
+
+    std::vector<std::uint32_t> red_ids{};
+    for (int i = 0; i < 18; ++i) {
+        const GridCoord cell{108 + (i % 5), 30 + (i / 5)};
+        const std::string archetype = i % 4 == 0 ? kUnitArchetypeEnemyHeavy : kUnitArchetypeEnemy;
+        if (world.addUnitFromArchetype(next_red_id, 1, world.terrain().cellCenter(cell), archetype)) {
+            red_ids.push_back(next_red_id);
+        }
+        ++next_red_id;
+    }
+    if (!red_ids.empty()) {
+        world.issueFormationOrder(red_ids,
+                                  world.terrain().cellCenter(GridCoord{18, 102}),
+                                  RtsOrderType::attack_move,
+                                  1.1f);
+    }
+}
+
+void seed_building_siege_scenario(RtsWorld& world, std::vector<std::uint32_t>& blue_ids) {
+    world.setTeamResourceAmount(0, "ore", 900);
+    world.setTeamResourceAmount(1, "ore", 600);
+    const std::vector<GridCoord> blue_buildings{
+        GridCoord{34, 88}, GridCoord{40, 88}, GridCoord{46, 88}, GridCoord{34, 96}, GridCoord{46, 96}
+    };
+    for (const GridCoord& anchor : blue_buildings) {
+        world.placeBuildingFromArchetype(0, kBuildingTower, anchor);
+    }
+    world.placeBuildingFromArchetype(0, kBuildingDepot, GridCoord{39, 94});
+    world.placeBuildingFromArchetype(0, kBuildingBarracks, GridCoord{31, 98});
+    world.placeBuildingFromArchetype(0, kBuildingFarm, GridCoord{47, 100});
+
+    std::uint32_t next_blue_id = 8000;
+    for (int i = 0; i < 16; ++i) {
+        const GridCoord cell{36 + (i % 8), 91 + (i / 8)};
+        const std::string archetype = i % 5 == 0 ? kUnitArchetypePlayerHeavy : kUnitArchetypePlayer;
+        if (world.addUnitFromArchetype(next_blue_id, 0, world.terrain().cellCenter(cell), archetype)) {
+            blue_ids.push_back(next_blue_id);
+        }
+        ++next_blue_id;
+    }
+    for (int i = 0; i < 4; ++i) {
+        const GridCoord cell{33 + i, 101};
+        if (world.addUnitFromArchetype(next_blue_id, 0, world.terrain().cellCenter(cell), kUnitArchetypeWorker)) {
+            blue_ids.push_back(next_blue_id);
+        }
+        ++next_blue_id;
+    }
+
+    std::uint32_t next_red_id = 8600;
+    std::vector<std::uint32_t> red_ids{};
+    const std::vector<MassBattleForceSpec> red_forces{
+        MassBattleForceSpec{
+            GridCoord{88, 46},
+            7,
+            28,
+            {kUnitArchetypeEnemy, kUnitArchetypeEnemyHeavy, kUnitArchetypeEnemyLancer, kUnitArchetypeEnemy},
+            {GridCoord{80, 54}, GridCoord{64, 64}, GridCoord{48, 88}, GridCoord{40, 94}}
+        },
+        MassBattleForceSpec{
+            GridCoord{96, 40},
+            6,
+            24,
+            {kUnitArchetypeEnemyBrute, kUnitArchetypeEnemy, kUnitArchetypeEnemyDasher},
+            {GridCoord{82, 72}, GridCoord{58, 98}, GridCoord{44, 96}}
+        },
+        MassBattleForceSpec{
+            GridCoord{78, 54},
+            6,
+            18,
+            {kUnitArchetypeEnemyLancer, kUnitArchetypeEnemyHeavy, kUnitArchetypeEnemy},
+            {GridCoord{66, 70}, GridCoord{52, 86}, GridCoord{38, 90}}
+        }
+    };
+    for (const MassBattleForceSpec& force : red_forces) {
+        spawn_mass_battle_force(world, 1, next_red_id, force, red_ids);
+    }
+}
+
+void configure_ai_vs_ai_profiles(RtsWorld& world) {
+    world.setAiProfile(0, RtsAiProfile{
+        0.45f,
+        2,
+        4,
+        10.0f,
+        true,
+        true,
+        true,
+        kUnitArchetypeWorker,
+        {kUnitArchetypePlayerScout,
+         kUnitArchetypePlayer,
+         kUnitArchetypePlayerHeavy,
+         kUnitArchetypeWorker,
+         kUnitArchetypePlayer}
+    });
+    world.setAiProfile(1, RtsAiProfile{
+        0.45f,
+        2,
+        4,
+        10.0f,
+        true,
+        true,
+        true,
+        kUnitArchetypeEnemyWorker,
+        {kUnitArchetypeEnemyScout,
+         kUnitArchetypeEnemy,
+         kUnitArchetypeEnemyDasher,
+         kUnitArchetypeEnemyHeavy,
+         kUnitArchetypeEnemyLancer,
+         kUnitArchetypeEnemyBrute,
+         kUnitArchetypeEnemyWorker}
+    });
+}
+
+void seed_ai_vs_ai_battle_scenario(RtsWorld& world, std::vector<std::uint32_t>& blue_ids) {
+    seed_demo_buildings(world);
+    seed_demo_units(world);
+    seed_demo_economy(world);
+    world.setTeamResourceAmount(0, "ore", 900);
+    world.setTeamResourceAmount(1, "ore", 900);
+    for (const RtsWorldUnitSnapshot& unit : world.unitSnapshots()) {
+        if (unit.team == 0) {
+            blue_ids.push_back(unit.unit_id);
+        }
+    }
+    configure_ai_vs_ai_profiles(world);
+}
+
+void seed_stress_test_scenario(RtsWorld& world, std::vector<std::uint32_t>& blue_ids) {
+    std::uint32_t next_blue_id = 9000;
+    std::uint32_t next_red_id = 12000;
+    std::vector<std::uint32_t> red_ids{};
+    const std::vector<std::string> blue_mix{
+        kUnitArchetypePlayer, kUnitArchetypePlayer, kUnitArchetypePlayerScout, kUnitArchetypePlayerHeavy
+    };
+    const std::vector<std::string> red_mix{
+        kUnitArchetypeEnemy, kUnitArchetypeEnemyDasher, kUnitArchetypeEnemyHeavy, kUnitArchetypeEnemyLancer
+    };
+
+    for (int i = 0; i < 256; ++i) {
+        const GridCoord cell{10 + (i % 32), 22 + (i / 32) * 4 + ((i % 2) * 2)};
+        const std::string& archetype = blue_mix[static_cast<std::size_t>(i) % blue_mix.size()];
+        if (world.addUnitFromArchetype(next_blue_id, 0, world.terrain().cellCenter(cell), archetype)) {
+            blue_ids.push_back(next_blue_id);
+        }
+        ++next_blue_id;
+    }
+    for (int i = 0; i < 256; ++i) {
+        const GridCoord cell{86 + (i % 32), 22 + (i / 32) * 4 + ((i % 2) * 2)};
+        const std::string& archetype = red_mix[static_cast<std::size_t>(i) % red_mix.size()];
+        if (world.addUnitFromArchetype(next_red_id, 1, world.terrain().cellCenter(cell), archetype)) {
+            red_ids.push_back(next_red_id);
+        }
+        ++next_red_id;
+    }
+
+    const std::vector<GridCoord> blue_targets{GridCoord{78, 32}, GridCoord{78, 64}, GridCoord{78, 96}};
+    const std::vector<GridCoord> red_targets{GridCoord{50, 32}, GridCoord{50, 64}, GridCoord{50, 96}};
+    for (std::size_t lane = 0; lane < blue_targets.size(); ++lane) {
+        std::vector<std::uint32_t> blue_lane{};
+        std::vector<std::uint32_t> red_lane{};
+        for (std::size_t i = lane; i < blue_ids.size(); i += blue_targets.size()) {
+            blue_lane.push_back(blue_ids[i]);
+        }
+        for (std::size_t i = lane; i < red_ids.size(); i += red_targets.size()) {
+            red_lane.push_back(red_ids[i]);
+        }
+        world.issueFormationOrder(blue_lane,
+                                  world.terrain().cellCenter(blue_targets[lane]),
+                                  RtsOrderType::attack_move,
+                                  0.9f);
+        world.issueFormationOrder(red_lane,
+                                  world.terrain().cellCenter(red_targets[lane]),
+                                  RtsOrderType::attack_move,
+                                  0.9f);
+    }
 }
 
 void configure_demo_enemy_ai(RtsWorld& world) {
@@ -1363,7 +2955,14 @@ void configure_demo_enemy_ai(RtsWorld& world) {
         true,
         true,
         kUnitArchetypeEnemyWorker,
-        {kUnitArchetypeEnemy, kUnitArchetypeEnemy, kUnitArchetypeEnemyWorker}
+        {kUnitArchetypeEnemyScout,
+         kUnitArchetypeEnemy,
+         kUnitArchetypeEnemyDasher,
+         kUnitArchetypeEnemyHeavy,
+         kUnitArchetypeEnemyLancer,
+         kUnitArchetypeEnemy,
+         kUnitArchetypeEnemyBrute,
+         kUnitArchetypeEnemyWorker}
     });
 }
 
@@ -1372,6 +2971,7 @@ void update_window_title(SDL_Window* window,
                          const std::unordered_map<std::uint32_t, UnitVisualState>& visuals,
                          const BuildModeState& build_mode,
                          bool attack_move_armed,
+                         const CommandUiState& command_ui,
                          const RtsWorld& world) {
     if (!window) {
         return;
@@ -1380,6 +2980,14 @@ void update_window_title(SDL_Window* window,
     std::string mode = build_mode.active ? std::string("Build ") + build_mode.label : "Command";
     if (attack_move_armed) {
         mode = "Attack-Move";
+    } else if (command_ui.patrol_mode) {
+        mode = "Patrol";
+    } else if (command_ui.guard_mode) {
+        mode = "Guard";
+    } else if (command_ui.rally_mode) {
+        mode = "Set Rally";
+    } else if (command_ui.selected_building_id.has_value()) {
+        mode = "Building";
     }
     std::string outcome{};
     if (world.isMatchOver() && world.winningTeam().has_value()) {
@@ -1420,7 +3028,8 @@ void render_scene(const DrawState& draw_state,
                   const std::unordered_map<std::uint32_t, UnitVisualState>& visuals,
                   const std::vector<BuildingStyle>& building_styles,
                   const BuildModeState& build_mode,
-                  const std::optional<std::uint32_t>& hovered_building) {
+                  const std::optional<std::uint32_t>& hovered_building,
+                  const std::optional<std::uint32_t>& selected_building) {
     if (!window) {
         return;
     }
@@ -1440,6 +3049,22 @@ void render_scene(const DrawState& draw_state,
     const glm::mat4 view = build_isometric_view(camera);
     const glm::vec3 light_position = camera.focus + glm::vec3(10.0f, 18.0f, 6.0f);
     const TerrainGrid& terrain = world.terrain();
+    const float now_seconds = static_cast<float>(SDL_GetTicks()) * 0.001f;
+
+    auto draw_block = [&](const glm::vec3& position,
+                          float yaw,
+                          const glm::vec3& scale,
+                          const glm::vec3& color,
+                          int render_mode = 0) {
+        draw_shape(draw_state,
+                   cube_shape,
+                   make_transform(position, yaw, scale),
+                   view,
+                   projection,
+                   light_position,
+                   color,
+                   render_mode);
+    };
 
     // draw a broad base plane first so any tiny gaps between raised terrain tiles still look intentional
     draw_shape(draw_state,
@@ -1492,102 +3117,157 @@ void render_scene(const DrawState& draw_state,
             const float noise_b = cell_noise(y + 7, x + 13);
             switch (terrain_cell.type) {
             case TerrainType::water:
-                draw_shape(draw_state,
-                           cube_shape,
-                           make_transform(glm::vec3(center.x,
-                                                    center.y + tile_height + 0.005f,
-                                                    center.z),
-                                          0.0f,
-                                          glm::vec3(terrain.cellSize() * 0.90f,
-                                                    0.016f,
-                                                    terrain.cellSize() * 0.90f)),
-                           view,
-                           projection,
-                           light_position,
+                draw_block(glm::vec3(center.x, center.y + tile_height + 0.005f, center.z),
+                           0.0f,
+                           glm::vec3(terrain.cellSize() * 0.90f, 0.016f, terrain.cellSize() * 0.90f),
                            glm::mix(final_color, glm::vec3(0.30f, 0.64f, 0.86f), 0.45f),
                            3);
+                draw_block(center + glm::vec3((noise_a - 0.5f) * 0.16f,
+                                              tile_height + 0.035f,
+                                              -0.18f + (noise_b - 0.5f) * 0.10f),
+                           0.25f,
+                           glm::vec3(0.58f, 0.018f, 0.05f),
+                           glm::vec3(0.54f, 0.82f, 0.96f),
+                           3);
+                if (noise_b > 0.50f) {
+                    draw_block(center + glm::vec3(0.14f,
+                                                  tile_height + 0.04f,
+                                                  0.18f + (noise_a - 0.5f) * 0.12f),
+                               -0.35f,
+                               glm::vec3(0.44f, 0.014f, 0.04f),
+                               glm::vec3(0.36f, 0.70f, 0.92f),
+                               3);
+                }
                 break;
             case TerrainType::forest: {
                 const glm::vec3 trunk_offset(
                     (noise_a - 0.5f) * terrain.cellSize() * 0.18f,
                     0.0f,
                     (noise_b - 0.5f) * terrain.cellSize() * 0.18f);
-                draw_shape(draw_state,
-                           cube_shape,
-                           make_transform(center + trunk_offset + glm::vec3(0.0f, 0.28f, 0.0f),
-                                          0.0f,
-                                          glm::vec3(0.09f, 0.46f, 0.09f)),
-                           view,
-                           projection,
-                           light_position,
-                           glm::vec3(0.22f, 0.16f, 0.10f),
-                           0);
-                draw_shape(draw_state,
-                           cube_shape,
-                           make_transform(center + trunk_offset + glm::vec3(0.0f, 0.74f, 0.0f),
-                                          0.0f,
-                                          glm::vec3(0.46f + noise_a * 0.10f,
-                                                    0.44f + noise_b * 0.12f,
-                                                    0.46f + noise_b * 0.10f)),
-                           view,
-                           projection,
-                           light_position,
+                draw_block(center + trunk_offset + glm::vec3(0.0f, 0.28f, 0.0f),
+                           0.0f,
+                           glm::vec3(0.09f, 0.46f, 0.09f),
+                           glm::vec3(0.22f, 0.16f, 0.10f));
+                draw_block(center + trunk_offset + glm::vec3(0.0f, 0.72f, 0.0f),
+                           noise_a * 0.8f,
+                           glm::vec3(0.46f + noise_a * 0.10f,
+                                     0.40f + noise_b * 0.10f,
+                                     0.46f + noise_b * 0.10f),
                            glm::mix(final_color, glm::vec3(0.28f, 0.44f, 0.18f), 0.55f),
                            4);
+                draw_block(center + trunk_offset + glm::vec3(0.0f, 1.03f, 0.0f),
+                           -noise_b * 0.6f,
+                           glm::vec3(0.30f + noise_b * 0.08f,
+                                     0.22f + noise_a * 0.06f,
+                                     0.30f + noise_a * 0.08f),
+                           glm::mix(final_color, glm::vec3(0.36f, 0.54f, 0.22f), 0.62f),
+                           4);
+                if (noise_a > 0.45f) {
+                    draw_block(center + glm::vec3(-0.30f, 0.16f, 0.26f),
+                               noise_b,
+                               glm::vec3(0.18f, 0.16f, 0.18f),
+                               glm::vec3(0.20f, 0.38f, 0.18f),
+                               4);
+                }
                 break;
             }
             case TerrainType::rock:
-                draw_shape(draw_state,
-                           cube_shape,
-                           make_transform(center + glm::vec3((noise_a - 0.5f) * 0.18f,
-                                                              0.20f + noise_b * 0.08f,
-                                                              (noise_b - 0.5f) * 0.18f),
-                                          noise_a * 0.9f,
-                                          glm::vec3(0.42f + noise_a * 0.12f,
-                                                    0.26f + noise_b * 0.10f,
-                                                    0.34f + noise_b * 0.12f)),
-                           view,
-                           projection,
-                           light_position,
-                           glm::mix(final_color, glm::vec3(0.58f, 0.58f, 0.60f), 0.25f),
-                           0);
+                draw_block(center + glm::vec3((noise_a - 0.5f) * 0.18f,
+                                              0.20f + noise_b * 0.08f,
+                                              (noise_b - 0.5f) * 0.18f),
+                           noise_a * 0.9f,
+                           glm::vec3(0.42f + noise_a * 0.12f,
+                                     0.26f + noise_b * 0.10f,
+                                     0.34f + noise_b * 0.12f),
+                           glm::mix(final_color, glm::vec3(0.58f, 0.58f, 0.60f), 0.25f));
                 if (noise_a > 0.58f) {
-                    draw_shape(draw_state,
-                               cube_shape,
-                               make_transform(center + glm::vec3(-0.18f,
-                                                                  0.12f + noise_a * 0.04f,
-                                                                  0.11f),
-                                              noise_b * 1.1f,
-                                              glm::vec3(0.24f, 0.18f, 0.22f)),
-                               view,
-                               projection,
-                               light_position,
-                               glm::mix(final_color, glm::vec3(0.65f, 0.66f, 0.68f), 0.18f),
-                               0);
+                    draw_block(center + glm::vec3(-0.18f, 0.12f + noise_a * 0.04f, 0.11f),
+                               noise_b * 1.1f,
+                               glm::vec3(0.24f, 0.18f, 0.22f),
+                               glm::mix(final_color, glm::vec3(0.65f, 0.66f, 0.68f), 0.18f));
+                }
+                if (noise_b > 0.70f) {
+                    draw_block(center + glm::vec3(0.22f, 0.34f, -0.18f),
+                               0.6f,
+                               glm::vec3(0.08f, 0.36f, 0.08f),
+                               glm::vec3(0.62f, 0.70f, 0.78f),
+                               2);
                 }
                 break;
             case TerrainType::grass:
                 if (noise_a > 0.86f) {
-                    draw_shape(draw_state,
-                               cube_shape,
-                               make_transform(center + glm::vec3((noise_b - 0.5f) * 0.20f,
-                                                                  0.07f,
-                                                                  (noise_a - 0.5f) * 0.20f),
-                                              0.0f,
-                                              glm::vec3(0.10f, 0.07f + noise_b * 0.05f, 0.10f)),
-                               view,
-                               projection,
-                               light_position,
+                    draw_block(center + glm::vec3((noise_b - 0.5f) * 0.20f,
+                                                  0.07f,
+                                                  (noise_a - 0.5f) * 0.20f),
+                               0.0f,
+                               glm::vec3(0.10f, 0.07f + noise_b * 0.05f, 0.10f),
                                glm::vec3(0.34f, 0.48f, 0.23f),
+                               4);
+                } else if (noise_a < 0.12f) {
+                    draw_block(center + glm::vec3(0.22f, 0.055f, -0.18f),
+                               noise_b,
+                               glm::vec3(0.06f, 0.06f, 0.06f),
+                               glm::vec3(0.78f, 0.66f, 0.34f),
                                4);
                 }
                 break;
             case TerrainType::road:
+                draw_block(center + glm::vec3(0.0f, tile_height + 0.018f, -terrain.cellSize() * 0.28f),
+                           0.0f,
+                           glm::vec3(terrain.cellSize() * 0.72f, 0.018f, 0.030f),
+                           glm::vec3(0.68f, 0.56f, 0.38f),
+                           3);
+                draw_block(center + glm::vec3(0.0f, tile_height + 0.018f, terrain.cellSize() * 0.28f),
+                           0.0f,
+                           glm::vec3(terrain.cellSize() * 0.72f, 0.018f, 0.030f),
+                           glm::vec3(0.38f, 0.30f, 0.20f),
+                           3);
+                if (noise_a > 0.78f) {
+                    draw_block(center + glm::vec3((noise_b - 0.5f) * 0.34f, tile_height + 0.03f, 0.0f),
+                               noise_b * 0.9f,
+                               glm::vec3(0.16f, 0.035f, 0.10f),
+                               glm::vec3(0.31f, 0.26f, 0.21f));
+                }
+                break;
             default:
                 break;
             }
         }
     }
+
+    const auto draw_beacon = [&](const GridCoord& cell,
+                                 const glm::vec3& color,
+                                 float pulse_offset,
+                                 float height) {
+        if (world.cellVisibilityForTeam(0, cell) == VisibilityState::unexplored) {
+            return;
+        }
+        const glm::vec3 center = terrain.cellCenter(cell);
+        const float pulse = 0.5f + 0.5f * std::sin(now_seconds * 3.0f + pulse_offset);
+        draw_shape(draw_state,
+                   cube_shape,
+                   make_transform(center + glm::vec3(0.0f, 0.10f, 0.0f),
+                                  0.0f,
+                                  glm::vec3(terrain.cellSize() * 0.70f, 0.05f, terrain.cellSize() * 0.70f)),
+                   view,
+                   projection,
+                   light_position,
+                   glm::mix(color, glm::vec3(1.0f), 0.18f + pulse * 0.18f),
+                   2);
+        draw_shape(draw_state,
+                   cube_shape,
+                   make_transform(center + glm::vec3(0.0f, 0.62f + pulse * 0.18f, 0.0f),
+                                  0.0f,
+                                  glm::vec3(0.16f, height, 0.16f)),
+                   view,
+                   projection,
+                   light_position,
+                   color,
+                   4);
+    };
+
+    draw_beacon(kBridgeObjectiveCell, glm::vec3(0.95f, 0.76f, 0.25f), 0.0f, 0.78f);
+    draw_beacon(kPlayerForwardTowerAnchor, glm::vec3(0.32f, 0.86f, 0.92f), 1.7f, 0.55f);
 
     for (const RtsWorldBuildingSnapshot& building : world.buildingSnapshots()) {
         if (building.team != 0 && !world.isBuildingVisibleToTeam(0, building.building_id)) {
@@ -1600,9 +3280,14 @@ void render_scene(const DrawState& draw_state,
 
         const bool is_hovered =
             hovered_building.has_value() && hovered_building.value() == building.building_id;
+        const bool is_selected =
+            selected_building.has_value() && selected_building.value() == building.building_id;
         glm::vec3 body_color = is_hovered
                                    ? glm::vec3(0.95f, 0.46f, 0.34f)
                                    : tinted_building_color(style->color, building.team);
+        if (is_selected) {
+            body_color = glm::mix(body_color, glm::vec3(0.92f, 0.88f, 0.34f), 0.28f);
+        }
         const float construction_ratio = building.under_construction
                                              ? std::clamp(0.22f + building.construction_progress * 0.78f,
                                                           0.22f,
@@ -1642,6 +3327,115 @@ void render_scene(const DrawState& draw_state,
                    light_position,
                    roof_color,
                    building.under_construction ? 2 : 0);
+        if (building.archetype_id == kBuildingFarm) {
+            const glm::vec3 crop_color =
+                building.team == 0 ? glm::vec3(0.48f, 0.78f, 0.30f) : glm::vec3(0.66f, 0.44f, 0.22f);
+            for (int row = 0; row < 3; ++row) {
+                draw_block(building.center + glm::vec3(-footprint_scale.x * 0.32f + row * 0.32f,
+                                                       0.14f,
+                                                       footprint_scale.z * 0.34f),
+                           0.0f,
+                           glm::vec3(0.06f, 0.20f, footprint_scale.z * 0.34f),
+                           crop_color,
+                           4);
+            }
+            draw_block(building.center + glm::vec3(footprint_scale.x * 0.30f, rendered_height + 0.44f, 0.0f),
+                       0.0f,
+                       glm::vec3(0.24f, 0.72f * construction_ratio, 0.24f),
+                       glm::mix(body_color, glm::vec3(0.88f, 0.74f, 0.38f), 0.45f));
+            draw_block(building.center + glm::vec3(footprint_scale.x * 0.30f, rendered_height + 0.86f, 0.0f),
+                       0.0f,
+                       glm::vec3(0.36f, 0.16f, 0.36f),
+                       roof_color,
+                       0);
+        } else if (building.archetype_id == kBuildingDepot) {
+            draw_block(building.center + glm::vec3(0.0f, rendered_height + 0.42f, -footprint_scale.z * 0.18f),
+                       0.0f,
+                       glm::vec3(footprint_scale.x * 0.52f, 0.24f * construction_ratio, 0.20f),
+                       glm::mix(body_color, glm::vec3(0.70f, 0.82f, 0.92f), 0.28f));
+            draw_block(building.center + glm::vec3(-footprint_scale.x * 0.34f, 0.30f, footprint_scale.z * 0.40f),
+                       0.0f,
+                       glm::vec3(0.30f, 0.34f, 0.34f),
+                       glm::vec3(0.43f, 0.31f, 0.18f));
+            draw_block(building.center + glm::vec3(-footprint_scale.x * 0.10f, 0.24f, footprint_scale.z * 0.42f),
+                       0.15f,
+                       glm::vec3(0.22f, 0.28f, 0.26f),
+                       glm::vec3(0.31f, 0.24f, 0.18f));
+            draw_block(building.center + glm::vec3(footprint_scale.x * 0.38f, rendered_height + 0.74f, footprint_scale.z * 0.18f),
+                       0.0f,
+                       glm::vec3(0.04f, 0.72f * construction_ratio, 0.04f),
+                       glm::vec3(0.12f, 0.14f, 0.16f));
+            draw_block(building.center + glm::vec3(footprint_scale.x * 0.38f, rendered_height + 1.12f, footprint_scale.z * 0.18f),
+                       0.0f,
+                       glm::vec3(0.24f, 0.04f, 0.24f),
+                       glm::mix(team_color(building.team), glm::vec3(1.0f), 0.25f),
+                       2);
+        } else if (building.archetype_id == kBuildingBarracks) {
+            draw_block(building.center + glm::vec3(0.0f, rendered_height + 0.40f, 0.0f),
+                       0.0f,
+                       glm::vec3(footprint_scale.x * 0.80f, 0.18f * construction_ratio, 0.20f),
+                       glm::mix(body_color, glm::vec3(0.18f, 0.20f, 0.24f), 0.32f));
+            draw_block(building.center + glm::vec3(-footprint_scale.x * 0.34f, 0.36f, footprint_scale.z * 0.42f),
+                       0.0f,
+                       glm::vec3(0.20f, 0.56f * construction_ratio, 0.06f),
+                       glm::vec3(0.13f, 0.15f, 0.18f));
+            draw_block(building.center + glm::vec3(footprint_scale.x * 0.34f, 0.36f, footprint_scale.z * 0.42f),
+                       0.0f,
+                       glm::vec3(0.20f, 0.56f * construction_ratio, 0.06f),
+                       glm::vec3(0.13f, 0.15f, 0.18f));
+            draw_block(building.center + glm::vec3(0.0f, 0.20f, -footprint_scale.z * 0.46f),
+                       0.0f,
+                       glm::vec3(footprint_scale.x * 0.62f, 0.05f, 0.12f),
+                       glm::vec3(0.86f, 0.76f, 0.30f),
+                       2);
+        } else if (building.archetype_id == kBuildingTower) {
+            draw_block(building.center + glm::vec3(0.0f, rendered_height + 0.54f, 0.0f),
+                       0.0f,
+                       glm::vec3(0.62f, 0.44f * construction_ratio, 0.62f),
+                       glm::mix(body_color, glm::vec3(0.58f, 0.62f, 0.70f), 0.36f));
+            draw_block(building.center + glm::vec3(0.0f, rendered_height + 0.96f, 0.0f),
+                       0.0f,
+                       glm::vec3(0.24f, 0.34f * construction_ratio, 0.24f),
+                       glm::vec3(0.14f, 0.16f, 0.20f));
+            draw_block(building.center + glm::vec3(0.0f, rendered_height + 1.16f, -0.44f),
+                       0.0f,
+                       glm::vec3(0.16f, 0.14f, 0.82f),
+                       glm::vec3(0.11f, 0.13f, 0.16f));
+            draw_block(building.center + glm::vec3(0.0f, 0.075f, 0.0f),
+                       0.0f,
+                       glm::vec3(footprint_scale.x * 1.42f, 0.025f, footprint_scale.z * 1.42f),
+                       glm::mix(team_color(building.team), glm::vec3(1.0f), 0.18f),
+                       3);
+        }
+        if (building.under_construction) {
+            const glm::vec3 scaffold_color(0.34f, 0.27f, 0.18f);
+            draw_block(building.center + glm::vec3(-footprint_scale.x * 0.52f, rendered_height + 0.34f, -footprint_scale.z * 0.52f),
+                       0.0f,
+                       glm::vec3(0.06f, rendered_height + 0.58f, 0.06f),
+                       scaffold_color);
+            draw_block(building.center + glm::vec3(footprint_scale.x * 0.52f, rendered_height + 0.34f, footprint_scale.z * 0.52f),
+                       0.0f,
+                       glm::vec3(0.06f, rendered_height + 0.58f, 0.06f),
+                       scaffold_color);
+            draw_block(building.center + glm::vec3(0.0f, rendered_height + 0.64f, 0.0f),
+                       0.65f,
+                       glm::vec3(footprint_scale.x * 1.16f, 0.05f, 0.05f),
+                       scaffold_color);
+        }
+        if (is_selected) {
+            draw_shape(draw_state,
+                       cube_shape,
+                       make_transform(building.center + glm::vec3(0.0f, 0.03f, 0.0f),
+                                      0.0f,
+                                      glm::vec3(footprint_scale.x * 1.08f,
+                                                0.03f,
+                                                footprint_scale.z * 1.08f)),
+                       view,
+                       projection,
+                       light_position,
+                       glm::vec3(0.98f, 0.86f, 0.26f),
+                       2);
+        }
         if (!building.under_construction) {
             const glm::vec3 banner_color = glm::mix(team_color(building.team), glm::vec3(1.0f), 0.15f);
             draw_shape(draw_state,
@@ -1667,6 +3461,34 @@ void render_scene(const DrawState& draw_state,
                        projection,
                        light_position,
                        banner_color,
+                       2);
+        }
+    }
+
+    if (selected_building.has_value()) {
+        const auto snapshot = world.getBuildingSnapshot(selected_building.value());
+        if (snapshot.has_value() && snapshot->team == 0) {
+            const glm::vec3 rally_point =
+                world.productionRallyPoint(selected_building.value());
+            draw_shape(draw_state,
+                       cube_shape,
+                       make_transform(rally_point + glm::vec3(0.0f, 0.34f, 0.0f),
+                                      0.0f,
+                                      glm::vec3(0.18f, 0.68f, 0.18f)),
+                       view,
+                       projection,
+                       light_position,
+                       glm::vec3(0.28f, 0.86f, 0.94f),
+                       2);
+            draw_shape(draw_state,
+                       cube_shape,
+                       make_transform(rally_point + glm::vec3(0.0f, 0.74f, 0.0f),
+                                      0.0f,
+                                      glm::vec3(0.46f, 0.10f, 0.10f)),
+                       view,
+                       projection,
+                       light_position,
+                       glm::vec3(0.96f, 0.94f, 0.54f),
                        2);
         }
     }
@@ -1747,23 +3569,46 @@ void render_scene(const DrawState& draw_state,
                    light_position,
                    glm::mix(node_color, glm::vec3(1.0f, 0.84f, 0.42f), 0.28f),
                    4);
+        draw_block(resource_node.center + glm::vec3(0.0f, 0.06f, 0.0f),
+                   0.0f,
+                   glm::vec3(0.84f, 0.035f, 0.84f),
+                   glm::vec3(0.33f, 0.24f, 0.11f),
+                   3);
+        draw_block(resource_node.center + glm::vec3(0.28f, 0.18f + fullness * 0.28f, 0.18f),
+                   0.78f,
+                   glm::vec3(0.09f, 0.30f + fullness * 0.28f, 0.09f),
+                   glm::mix(node_color, glm::vec3(1.0f, 0.94f, 0.54f), 0.42f),
+                   4);
+        draw_block(resource_node.center + glm::vec3(-0.26f, 0.15f + fullness * 0.20f, -0.20f),
+                   -0.55f,
+                   glm::vec3(0.08f, 0.22f + fullness * 0.22f, 0.08f),
+                   glm::mix(node_color, glm::vec3(0.96f, 0.78f, 0.32f), 0.36f),
+                   4);
     }
 
     for (const RtsWorldProjectileSnapshot& projectile : world.projectileSnapshots()) {
-        // projectiles are tiny bright cubes because they only need to communicate motion and ownership
+        // projectiles are tiny bright cubes with a short tail because they only need to communicate motion and ownership
         const glm::vec3 projectile_color = projectile.from_tower
                                                ? glm::vec3(1.0f, 0.54f, 0.30f)
                                                : glm::vec3(1.0f, 0.88f, 0.34f);
-        draw_shape(draw_state,
-                   cube_shape,
-                   make_transform(projectile.position + glm::vec3(0.0f, 0.18f, 0.0f),
-                                  0.0f,
-                                  glm::vec3(0.16f, 0.12f, 0.16f)),
-                   view,
-                   projection,
-                   light_position,
+        const glm::vec3 aim_delta = projectile.target_position - projectile.position;
+        glm::vec3 trail_direction(0.0f, 0.0f, 1.0f);
+        if (glm::dot(aim_delta, aim_delta) > 0.0001f) {
+            trail_direction = glm::normalize(aim_delta);
+        }
+        const float projectile_yaw = std::atan2(trail_direction.x, trail_direction.z);
+        draw_block(projectile.position + glm::vec3(0.0f, 0.18f, 0.0f),
+                   projectile_yaw,
+                   projectile.from_tower ? glm::vec3(0.22f, 0.14f, 0.22f)
+                                         : glm::vec3(0.16f, 0.12f, 0.16f),
                    projectile_color,
                    2);
+        draw_block(projectile.position - trail_direction * 0.18f + glm::vec3(0.0f, 0.16f, 0.0f),
+                   projectile_yaw,
+                   projectile.from_tower ? glm::vec3(0.10f, 0.07f, 0.34f)
+                                         : glm::vec3(0.08f, 0.05f, 0.26f),
+                   glm::mix(projectile_color, glm::vec3(1.0f), 0.22f),
+                   3);
     }
 
     std::vector<std::uint32_t> visible_ids{};
@@ -1800,9 +3645,33 @@ void render_scene(const DrawState& draw_state,
         const UnitVisualState& visual = visual_it->second;
         const float bob_offset = 0.04f * std::sin(visual.bob_phase);
         const glm::vec3 base_position = unit.position;
-        const glm::vec3 body_color = flash_color(team_color(unit.team), unit.recent_hit_timer);
+        const glm::vec3 body_color = flash_color(unit_body_color(unit), unit.recent_hit_timer);
         const glm::vec3 head_color = flash_color(team_head_color(unit.team), unit.recent_hit_timer);
         const float health_ratio = std::clamp(unit.health / std::max(unit.max_health, 0.001f), 0.0f, 1.0f);
+        glm::vec3 body_scale(0.34f, 0.72f, 0.24f);
+        glm::vec3 head_scale(0.24f, 0.24f, 0.24f);
+        if (unit.archetype_id == kUnitArchetypePlayerScout ||
+            unit.archetype_id == kUnitArchetypeEnemyScout) {
+            body_scale = glm::vec3(0.26f, 0.58f, 0.20f);
+            head_scale = glm::vec3(0.20f, 0.20f, 0.20f);
+        } else if (unit.archetype_id == kUnitArchetypeEnemyDasher) {
+            body_scale = glm::vec3(0.22f, 0.46f, 0.16f);
+            head_scale = glm::vec3(0.18f, 0.18f, 0.18f);
+        } else if (unit.archetype_id == kUnitArchetypePlayerHeavy ||
+                   unit.archetype_id == kUnitArchetypeEnemyHeavy) {
+            body_scale = glm::vec3(0.48f, 0.78f, 0.34f);
+            head_scale = glm::vec3(0.28f, 0.26f, 0.28f);
+        } else if (unit.archetype_id == kUnitArchetypeEnemyLancer) {
+            body_scale = glm::vec3(0.30f, 0.68f, 0.22f);
+            head_scale = glm::vec3(0.21f, 0.23f, 0.21f);
+        } else if (unit.archetype_id == kUnitArchetypeEnemyBrute) {
+            body_scale = glm::vec3(0.62f, 0.88f, 0.44f);
+            head_scale = glm::vec3(0.30f, 0.28f, 0.30f);
+        } else if (unit.archetype_id == kUnitArchetypeWorker ||
+                   unit.archetype_id == kUnitArchetypeEnemyWorker) {
+            body_scale = glm::vec3(0.30f, 0.62f, 0.22f);
+            head_scale = glm::vec3(0.22f, 0.22f, 0.22f);
+        }
 
         // dark plate under the unit acts like a cheap contact shadow and grounds the model on uneven terrain
         draw_shape(draw_state,
@@ -1867,7 +3736,7 @@ void render_scene(const DrawState& draw_state,
                    cube_shape,
                    make_transform(base_position + glm::vec3(0.0f, 0.62f + bob_offset, 0.0f),
                                   visual.facing_yaw_radians,
-                                  glm::vec3(0.34f, 0.72f, 0.24f)),
+                                  body_scale),
                    view,
                    projection,
                    light_position,
@@ -1877,22 +3746,143 @@ void render_scene(const DrawState& draw_state,
                    cube_shape,
                    make_transform(base_position + glm::vec3(0.0f, 1.10f + bob_offset, 0.0f),
                                   visual.facing_yaw_radians,
-                                  glm::vec3(0.24f, 0.24f, 0.24f)),
+                                  head_scale),
                    view,
                    projection,
                    light_position,
                    head_color,
                    0);
+        const bool is_worker = unit.archetype_id == kUnitArchetypeWorker ||
+                               unit.archetype_id == kUnitArchetypeEnemyWorker;
+        const bool is_scout = unit.archetype_id == kUnitArchetypePlayerScout ||
+                              unit.archetype_id == kUnitArchetypeEnemyScout ||
+                              unit.archetype_id == kUnitArchetypeEnemyDasher;
+        const bool is_heavy = unit.archetype_id == kUnitArchetypePlayerHeavy ||
+                              unit.archetype_id == kUnitArchetypeEnemyHeavy ||
+                              unit.archetype_id == kUnitArchetypeEnemyLancer;
+        const bool is_brute = unit.archetype_id == kUnitArchetypeEnemyBrute;
+        const glm::vec3 kit_color = unit.team == 0
+                                        ? glm::vec3(0.84f, 0.94f, 1.0f)
+                                        : glm::vec3(1.0f, 0.76f, 0.60f);
+        draw_block(base_position + glm::vec3(-0.14f, 0.25f + bob_offset * 0.35f, 0.13f),
+                   visual.facing_yaw_radians,
+                   glm::vec3(0.09f, 0.28f, 0.08f),
+                   glm::mix(body_color, glm::vec3(0.05f), 0.45f));
+        draw_block(base_position + glm::vec3(0.14f, 0.25f - bob_offset * 0.35f, -0.13f),
+                   visual.facing_yaw_radians,
+                   glm::vec3(0.09f, 0.28f, 0.08f),
+                   glm::mix(body_color, glm::vec3(0.05f), 0.45f));
+        draw_block(base_position + glm::vec3(0.0f, 1.27f + bob_offset, -0.13f),
+                   visual.facing_yaw_radians,
+                   is_scout ? glm::vec3(0.10f, 0.30f, 0.05f) : glm::vec3(0.08f, 0.20f, 0.05f),
+                   kit_color,
+                   2);
+        if (is_worker) {
+            draw_block(base_position + glm::vec3(0.26f, 0.58f + bob_offset, 0.16f),
+                       visual.facing_yaw_radians,
+                       glm::vec3(0.10f, 0.30f, 0.10f),
+                       glm::vec3(0.78f, 0.66f, 0.30f),
+                       4);
+            draw_block(base_position + glm::vec3(0.34f, 0.82f + bob_offset, -0.08f),
+                       visual.facing_yaw_radians + 0.55f,
+                       glm::vec3(0.06f, 0.38f, 0.06f),
+                       glm::vec3(0.15f, 0.17f, 0.18f));
+        } else if (is_scout) {
+            draw_block(base_position + glm::vec3(-0.22f, 0.95f + bob_offset, 0.0f),
+                       visual.facing_yaw_radians,
+                       glm::vec3(0.06f, 0.38f, 0.06f),
+                       glm::vec3(0.16f, 0.22f, 0.20f));
+            draw_block(base_position + glm::vec3(-0.22f, 1.20f + bob_offset, 0.0f),
+                       visual.facing_yaw_radians,
+                       glm::vec3(0.18f, 0.04f, 0.18f),
+                       glm::vec3(0.34f, 0.95f, 0.72f),
+                       2);
+        } else if (is_heavy) {
+            draw_block(base_position + glm::vec3(-0.22f, 0.76f + bob_offset, 0.0f),
+                       visual.facing_yaw_radians,
+                       glm::vec3(0.16f, 0.24f, 0.42f),
+                       glm::vec3(0.10f, 0.12f, 0.15f));
+            draw_block(base_position + glm::vec3(0.0f, 1.02f + bob_offset, -0.34f),
+                       visual.facing_yaw_radians,
+                       glm::vec3(0.28f, 0.10f, 0.16f),
+                       glm::mix(kit_color, glm::vec3(0.96f, 0.76f, 0.28f), 0.35f),
+                       2);
+        } else if (is_brute) {
+            draw_block(base_position + glm::vec3(0.0f, 0.82f + bob_offset, -0.32f),
+                       visual.facing_yaw_radians,
+                       glm::vec3(0.58f, 0.12f, 0.14f),
+                       glm::vec3(0.38f, 0.12f, 0.08f));
+            draw_block(base_position + glm::vec3(0.0f, 1.30f + bob_offset, 0.0f),
+                       visual.facing_yaw_radians,
+                       glm::vec3(0.52f, 0.08f, 0.52f),
+                       glm::vec3(0.96f, 0.44f, 0.20f),
+                       2);
+        } else {
+            draw_block(base_position + glm::vec3(-0.20f, 0.82f + bob_offset, 0.0f),
+                       visual.facing_yaw_radians,
+                       glm::vec3(0.08f, 0.36f, 0.08f),
+                       glm::vec3(0.12f, 0.14f, 0.17f));
+        }
         draw_shape(draw_state,
                    cube_shape,
                    make_transform(base_position + glm::vec3(0.19f, 0.72f + bob_offset, 0.0f),
                                   visual.facing_yaw_radians,
-                                  glm::vec3(0.08f, 0.20f, 0.26f)),
+                                  unit.archetype_id == kUnitArchetypeEnemyLancer
+                                      ? glm::vec3(0.10f, 0.12f, 0.78f)
+                                      : unit.archetype_id == kUnitArchetypePlayerHeavy ||
+                                                unit.archetype_id == kUnitArchetypeEnemyHeavy
+                                      ? glm::vec3(0.22f, 0.16f, 0.42f)
+                                      : glm::vec3(0.08f, 0.20f, 0.26f)),
                    view,
                    projection,
                    light_position,
                    glm::vec3(0.09f, 0.12f, 0.16f),
                    0);
+
+        if (unit.archetype_id == kUnitArchetypeEnemyDasher) {
+            draw_shape(draw_state,
+                       cube_shape,
+                       make_transform(base_position + glm::vec3(-0.18f, 0.50f + bob_offset, 0.18f),
+                                      visual.facing_yaw_radians,
+                                      glm::vec3(0.26f, 0.05f, 0.10f)),
+                       view,
+                       projection,
+                       light_position,
+                       glm::vec3(0.12f, 0.92f, 0.78f),
+                       4);
+            draw_shape(draw_state,
+                       cube_shape,
+                       make_transform(base_position + glm::vec3(-0.18f, 0.50f + bob_offset, -0.18f),
+                                      visual.facing_yaw_radians,
+                                      glm::vec3(0.26f, 0.05f, 0.10f)),
+                       view,
+                       projection,
+                       light_position,
+                       glm::vec3(0.12f, 0.92f, 0.78f),
+                       4);
+        } else if (unit.archetype_id == kUnitArchetypeEnemyLancer) {
+            draw_shape(draw_state,
+                       cube_shape,
+                       make_transform(base_position + glm::vec3(0.42f, 0.84f + bob_offset, 0.0f),
+                                      visual.facing_yaw_radians,
+                                      glm::vec3(0.42f, 0.08f, 0.08f)),
+                       view,
+                       projection,
+                       light_position,
+                       glm::vec3(0.88f, 0.70f, 1.0f),
+                       2);
+        } else if (unit.archetype_id == kUnitArchetypeEnemyBrute) {
+            draw_shape(draw_state,
+                       cube_shape,
+                       make_transform(base_position + glm::vec3(-0.26f, 0.74f + bob_offset, 0.0f),
+                                      visual.facing_yaw_radians,
+                                      glm::vec3(0.10f, 0.52f, 0.48f)),
+                       view,
+                       projection,
+                       light_position,
+                       glm::vec3(0.34f, 0.12f, 0.10f),
+                       0);
+        }
 
         if (unit.carried_resource_amount > 0) {
             // workers carrying ore get a visible gold pack so the economy loop is readable in motion
@@ -1926,28 +3916,13 @@ void draw_selection_overlay(SDL_Window* window, const SelectionState& selection)
         return;
     }
 
-    int width = 1;
-    int height = 1;
-    SDL_GetWindowSize(window, &width, &height);
-
-    glEnable(GL_SCISSOR_TEST);
-    glClearColor(0.97f, 0.90f, 0.35f, 1.0f);
-
-    auto draw_rect = [height](int x, int y, int w, int h) {
-        if (w <= 0 || h <= 0) {
-            return;
-        }
-        glScissor(x, height - (y + h), w, h);
-        glClear(GL_COLOR_BUFFER_BIT);
-    };
-
     // draw the rectangle as four thin filled bars
     // scissoring is enough here and avoids introducing a second 2d line renderer
-    draw_rect(min_x, min_y, max_x - min_x, 2);
-    draw_rect(min_x, max_y - 2, max_x - min_x, 2);
-    draw_rect(min_x, min_y, 2, max_y - min_y);
-    draw_rect(max_x - 2, min_y, 2, max_y - min_y);
-    glDisable(GL_SCISSOR_TEST);
+    const glm::vec3 color(0.97f, 0.90f, 0.35f);
+    draw_screen_rect(window, min_x, min_y, max_x - min_x, 2, color);
+    draw_screen_rect(window, min_x, max_y - 2, max_x - min_x, 2, color);
+    draw_screen_rect(window, min_x, min_y, 2, max_y - min_y, color);
+    draw_screen_rect(window, max_x - 2, min_y, 2, max_y - min_y, color);
 }
 
 void increment_label_count(std::vector<std::pair<std::string, int>>& counts,
@@ -1992,15 +3967,27 @@ void draw_minimap_panel(SDL_Window* window,
                         int y,
                         const RtsWorld& world,
                         const CameraState& camera,
-                        const std::vector<RtsWorldUnitSnapshot>& unit_snapshots,
-                        const std::unordered_map<std::uint32_t, UnitVisualState>& unit_visuals) {
+	                      const std::vector<RtsWorldUnitSnapshot>& unit_snapshots,
+	                      const std::unordered_map<std::uint32_t, UnitVisualState>& unit_visuals) {
     const TerrainGrid& terrain = world.terrain();
-    const int cell_pixels = 6;
+    const int map_size = 140;
+    const int cell_pixels = std::max(1, map_size / std::max(terrain.width(), terrain.height()));
     const int map_x = x + 18;
     const int map_y = y + 30;
+    const auto scaled_x = [&](int cell_x) {
+        return map_x + static_cast<int>(
+                           std::round(static_cast<float>(cell_x) * static_cast<float>(map_size) /
+                                      static_cast<float>(std::max(terrain.width(), 1))));
+    };
+    const auto scaled_y = [&](int cell_y) {
+        return map_y + static_cast<int>(
+                           std::round(static_cast<float>(cell_y) * static_cast<float>(map_size) /
+                                      static_cast<float>(std::max(terrain.height(), 1))));
+    };
 
     draw_panel(window, x, y, 206, 196, glm::vec3(0.08f, 0.11f, 0.13f), glm::vec3(0.26f, 0.70f, 0.78f));
     draw_pixel_text(window, x + 16, y + 8, "MINIMAP", 2, glm::vec3(0.90f, 0.95f, 0.98f));
+    draw_screen_rect(window, map_x - 2, map_y - 2, map_size + 4, map_size + 4, glm::vec3(0.03f, 0.04f, 0.05f));
 
     for (int cell_y = 0; cell_y < terrain.height(); ++cell_y) {
         for (int cell_x = 0; cell_x < terrain.width(); ++cell_x) {
@@ -2013,10 +4000,10 @@ void draw_minimap_panel(SDL_Window* window,
                 color *= 0.45f;
             }
             draw_screen_rect(window,
-                             map_x + cell_x * cell_pixels,
-                             map_y + cell_y * cell_pixels,
-                             cell_pixels - 1,
-                             cell_pixels - 1,
+                             scaled_x(cell_x),
+                             scaled_y(cell_y),
+                             std::max(1, cell_pixels),
+                             std::max(1, cell_pixels),
                              color);
         }
     }
@@ -2027,10 +4014,10 @@ void draw_minimap_panel(SDL_Window* window,
             continue;
         }
         draw_screen_rect(window,
-                         map_x + node.cell.x * cell_pixels + 1,
-                         map_y + node.cell.y * cell_pixels + 1,
-                         cell_pixels - 3,
-                         cell_pixels - 3,
+                         scaled_x(node.cell.x) - 1,
+                         scaled_y(node.cell.y) - 1,
+                         3,
+                         3,
                          glm::vec3(0.90f, 0.76f, 0.25f));
     }
 
@@ -2039,10 +4026,10 @@ void draw_minimap_panel(SDL_Window* window,
             continue;
         }
         draw_screen_rect(window,
-                         map_x + building.anchor.x * cell_pixels,
-                         map_y + building.anchor.y * cell_pixels,
-                         std::max(2, building.footprint_width * cell_pixels - 1),
-                         std::max(2, building.footprint_height * cell_pixels - 1),
+                         scaled_x(building.anchor.x),
+                         scaled_y(building.anchor.y),
+                         std::max(3, building.footprint_width * cell_pixels),
+                         std::max(3, building.footprint_height * cell_pixels),
                          building.team == 0 ? glm::vec3(0.28f, 0.66f, 0.95f)
                                             : glm::vec3(0.92f, 0.38f, 0.28f));
     }
@@ -2059,8 +4046,8 @@ void draw_minimap_panel(SDL_Window* window,
         const bool selected =
             visual_it != unit_visuals.end() && visual_it->second.selected && snapshot.team == 0;
         draw_screen_rect(window,
-                         map_x + cell.x * cell_pixels + 2,
-                         map_y + cell.y * cell_pixels + 2,
+                         scaled_x(cell.x),
+                         scaled_y(cell.y),
                          selected ? 4 : 3,
                          selected ? 4 : 3,
                          selected ? glm::vec3(0.98f, 0.88f, 0.30f)
@@ -2070,15 +4057,168 @@ void draw_minimap_panel(SDL_Window* window,
 
     GridCoord focus_cell{};
     if (terrain.worldToCell(camera.focus, focus_cell)) {
-        const int focus_x = map_x + focus_cell.x * cell_pixels - 2;
-        const int focus_y = map_y + focus_cell.y * cell_pixels - 2;
-        draw_screen_rect(window, focus_x, focus_y, cell_pixels + 3, 2, glm::vec3(0.96f, 0.95f, 0.80f));
-        draw_screen_rect(window, focus_x, focus_y + cell_pixels + 1, cell_pixels + 3, 2, glm::vec3(0.96f, 0.95f, 0.80f));
-        draw_screen_rect(window, focus_x, focus_y, 2, cell_pixels + 3, glm::vec3(0.96f, 0.95f, 0.80f));
-        draw_screen_rect(window, focus_x + cell_pixels + 1, focus_y, 2, cell_pixels + 3, glm::vec3(0.96f, 0.95f, 0.80f));
+        const int focus_x = scaled_x(focus_cell.x) - 3;
+        const int focus_y = scaled_y(focus_cell.y) - 3;
+        draw_screen_rect(window, focus_x, focus_y, 8, 2, glm::vec3(0.96f, 0.95f, 0.80f));
+        draw_screen_rect(window, focus_x, focus_y + 6, 8, 2, glm::vec3(0.96f, 0.95f, 0.80f));
+        draw_screen_rect(window, focus_x, focus_y, 2, 8, glm::vec3(0.96f, 0.95f, 0.80f));
+        draw_screen_rect(window, focus_x + 6, focus_y, 2, 8, glm::vec3(0.96f, 0.95f, 0.80f));
     }
 
-    draw_pixel_text(window, x + 16, y + 178, "GOLD DOTS ARE ORE", 1, glm::vec3(0.78f, 0.82f, 0.85f));
+    draw_pixel_text_fit(window, x + 16, y + 178, "GOLD DOTS ARE ORE", 1, 174, glm::vec3(0.78f, 0.82f, 0.85f));
+}
+
+void draw_tutorial_row(SDL_Window* window,
+                       int x,
+                       int y,
+                       int label_width,
+                       const std::string& label,
+                       const std::string& detail,
+                       const glm::vec3& accent) {
+    draw_pixel_text_fit(window, x, y, label, 1, label_width, accent);
+    draw_pixel_text_fit(window,
+                        x + label_width + 12,
+                        y,
+                        detail,
+                        1,
+                        520 - label_width,
+                        glm::vec3(0.80f, 0.86f, 0.90f));
+}
+
+void draw_tutorial_overlay(SDL_Window* window) {
+    if (!window) {
+        return;
+    }
+
+    const HudLayout layout = build_hud_layout(window);
+    constexpr int panel_w = 650;
+    constexpr int panel_h = 430;
+    const int panel_x = (layout.screen_w - panel_w) / 2;
+    constexpr int panel_y = 92;
+    draw_panel(window,
+               panel_x,
+               panel_y,
+               panel_w,
+               panel_h,
+               glm::vec3(0.055f, 0.075f, 0.090f),
+               glm::vec3(0.92f, 0.72f, 0.26f));
+    draw_pixel_text_center_fit(window,
+                               panel_x + panel_w / 2,
+                               panel_y + 18,
+                               kStressTestDemo ? "STRESS TEST FIELD MANUAL"
+                                               : kAiVsAiBattleDemo ? "AI VS AI FIELD MANUAL"
+                                               : kBuildingSiegeDemo ? "SIEGE FIELD MANUAL"
+                                               : kPathfindingLabDemo ? "PATHFINDING FIELD MANUAL"
+                                               : kMassBattleDemo ? "100 V 100 FIELD MANUAL"
+                                                                 : "RTS FIELD MANUAL",
+                               3,
+                               panel_w - 56,
+                               glm::vec3(0.96f, 0.96f, 0.92f));
+    draw_pixel_text_center_fit(window,
+                               panel_x + panel_w / 2,
+                               panel_y + 52,
+                               "F1 TO HIDE OR SHOW",
+                               1,
+                               panel_w - 56,
+                               glm::vec3(0.72f, 0.82f, 0.88f));
+
+    const int x = panel_x + 34;
+    int y = panel_y + 88;
+    const int label_width = 104;
+    const glm::vec3 blue(0.54f, 0.82f, 1.0f);
+    const glm::vec3 gold(0.96f, 0.78f, 0.30f);
+    const glm::vec3 green(0.54f, 0.90f, 0.54f);
+
+    draw_pixel_text(window,
+                    x,
+                    y,
+                    kScenarioVariantDemo ? "SHOWCASE START" : "FIRST MINUTE",
+                    2,
+                    gold);
+    y += 28;
+    if (!kScenarioVariantDemo) {
+        draw_tutorial_row(window, x, y, label_width, "1 SELECT", "CLICK OR DRAG BLUE UNITS", blue);
+        y += 18;
+        draw_tutorial_row(window, x, y, label_width, "2 SCOUT", "RMB MOVE TOWARD THE BRIDGE AND ORE", blue);
+        y += 18;
+        draw_tutorial_row(window, x, y, label_width, "3 ECON", "SELECT WORKER THEN RMB GOLD ORE", blue);
+        y += 18;
+        draw_tutorial_row(window, x, y, label_width, "4 BUILD", "B FARM N DEPOT C BARRACKS T TOWER", blue);
+        y += 32;
+    } else {
+        const char* scenario_text = kStressTestDemo
+                                        ? "512 UNITS ACROSS THREE ATTACK LANES"
+                                        : kAiVsAiBattleDemo
+                                        ? "TWO AI TEAMS HARVEST BUILD AND ATTACK"
+                                        : kBuildingSiegeDemo
+                                        ? "RED WAVES ATTACK A TOWER FORTRESS"
+                                        : kPathfindingLabDemo
+                                        ? "SQUADS ROUTE THROUGH ROCK AND WATER MAZE"
+                                        : "100 BLUE VS 100 RED ATTACK ONLY";
+        const char* layout_text = kStressTestDemo
+                                      ? "WIDE LANES BUILT FOR CROWD LOAD"
+                                      : kAiVsAiBattleDemo
+                                      ? "WATCH PRODUCTION AND ATTACK TIMING"
+                                      : kBuildingSiegeDemo
+                                      ? "TOWERS REPAIR CREWS ARTILLERY PRESSURE"
+                                      : kPathfindingLabDemo
+                                      ? "GATES FORCE LONG PATH RESOLUTION"
+                                      : "CENTER BRIDGE PLUS NORTH AND SOUTH FLANKS";
+        draw_tutorial_row(window, x, y, label_width, "SCENARIO", scenario_text, blue);
+        y += 18;
+        draw_tutorial_row(window, x, y, label_width, "LAYOUT", layout_text, blue);
+        y += 18;
+        draw_tutorial_row(window, x, y, label_width, "CONTROL", "PRESS 1 TO RESELECT BLUE UNITS", blue);
+        y += 18;
+        draw_tutorial_row(window, x, y, label_width, "CAMERA", "ARROWS PAN  MOUSE WHEEL ZOOMS", blue);
+        y += 32;
+    }
+
+    draw_pixel_text(window, x, y, "COMBAT AND CONTROL", 2, gold);
+    y += 28;
+    draw_tutorial_row(window,
+                      x,
+                      y,
+                      label_width,
+                      "RMB",
+                      kScenarioVariantDemo ? "RETARGET SELECTED FORCES"
+                                           : "MOVE ATTACK REPAIR HARVEST OR SET RALLY",
+                      green);
+    y += 18;
+    draw_tutorial_row(window, x, y, label_width, "A P G", "ATTACK MOVE PATROL GUARD", green);
+    y += 18;
+    draw_tutorial_row(window, x, y, label_width, "S H", "STOP OR HOLD POSITION", green);
+    y += 18;
+    draw_tutorial_row(window, x, y, label_width, "CTRL 1-3", "SAVE CONTROL GROUPS  1-3 RECALL", green);
+    y += 18;
+    draw_tutorial_row(window, x, y, label_width, "SHIFT RMB", "QUEUE ORDERS INSTEAD OF REPLACING", green);
+    y += 32;
+
+    draw_pixel_text(window, x, y, kScenarioVariantDemo ? "SYSTEM FOCUS" : "PRODUCTION AND MATCHUPS", 2, gold);
+    y += 28;
+    draw_tutorial_row(window,
+                      x,
+                      y,
+                      label_width,
+                      kScenarioVariantDemo ? "FOCUS" : "Q E Z V",
+                      kStressTestDemo
+                          ? "SCALE CROWDING PROJECTILES AND PATH LOAD"
+                          : kAiVsAiBattleDemo
+                          ? "AUTONOMY ECONOMY AND ATTACK PLANNING"
+                          : kBuildingSiegeDemo
+                          ? "BUILDING FIRE REPAIRS AND SIEGE UNITS"
+                          : kPathfindingLabDemo
+                          ? "PATH SMOOTHING OBSTACLE AVOIDANCE"
+                          : kMassBattleDemo
+                          ? "INFANTRY SCOUTS AND HEAVY ARTILLERY"
+                          : "QUEUE WORKER INFANTRY SCOUT HEAVY",
+                      glm::vec3(0.88f, 0.76f, 1.0f));
+    y += 18;
+    draw_tutorial_row(window, x, y, label_width, "TRIANGLE", "ASSAULT BEATS SCOUT  SCOUT BEATS HEAVY", glm::vec3(0.88f, 0.76f, 1.0f));
+    y += 18;
+    draw_tutorial_row(window, x, y, label_width, "ENEMIES", "DASHER FAST  LANCER RANGE  BRUTE TANK", glm::vec3(0.88f, 0.76f, 1.0f));
+    y += 18;
+    draw_tutorial_row(window, x, y, label_width, "MAP", "RED INFO ONLY UPDATES WHEN VISIBLE IN FOG", glm::vec3(0.88f, 0.76f, 1.0f));
 }
 
 void draw_hud_overlay(SDL_Window* window,
@@ -2089,13 +4229,32 @@ void draw_hud_overlay(SDL_Window* window,
                       const std::vector<RtsWorldUnitSnapshot>& unit_snapshots,
                       const std::unordered_map<std::uint32_t, UnitVisualState>& unit_visuals,
                       const std::optional<std::uint32_t>& hovered_building,
-                      const HudPulseState& hud_pulses) {
+                      const CommandUiState& command_ui,
+                      const HudPulseState& hud_pulses,
+                      const AlertState& alert,
+                      const DemoDirectorState& director,
+                      bool tutorial_open) {
     if (!window) {
         return;
     }
 
+    const HudLayout layout = build_hud_layout(window);
     const auto snapshot_map = snapshot_map_from_vector(unit_snapshots);
     const std::vector<std::uint32_t> selected_ids = selected_unit_ids(unit_visuals, snapshot_map);
+    const auto building = selected_building_snapshot(world, command_ui);
+    const std::optional<std::uint32_t> context_building_id =
+        building.has_value() ? std::optional<std::uint32_t>(building->building_id) : hovered_building;
+    const auto context_production =
+        context_building_id.has_value() ? find_production_snapshot(world, context_building_id.value())
+                                        : std::nullopt;
+    const std::vector<CommandButton> command_buttons =
+        build_command_buttons(world,
+                              unit_visuals,
+                              snapshot_map,
+                              build_mode,
+                              attack_move_armed,
+                              command_ui,
+                              layout);
     int selected_workers = 0;
     int carried_total = 0;
     float average_health_ratio = 0.0f;
@@ -2141,9 +4300,11 @@ void draw_hud_overlay(SDL_Window* window,
 
     const int ore = world.teamResourceAmount(0, "ore");
     const int supply_used = world.teamSupplyUsed(0);
-    const int supply_cap = std::max(world.teamSupplyProvided(0), 1);
+    const int supply_cap = kMassBattleDemo
+                               ? std::max(world.teamSupplyUsed(0), 1)
+                               : std::max(world.teamSupplyProvided(0), 1);
     const int blue_units = static_cast<int>(team_unit_count(unit_snapshots, 0));
-    const int red_units = static_cast<int>(team_unit_count(unit_snapshots, 1));
+    const int red_units = visible_enemy_unit_count(world, unit_snapshots);
     const float ore_ratio = std::clamp(static_cast<float>(ore) / 300.0f, 0.0f, 1.0f);
     const float supply_ratio = std::clamp(static_cast<float>(supply_used) /
                                               static_cast<float>(supply_cap),
@@ -2157,11 +4318,11 @@ void draw_hud_overlay(SDL_Window* window,
         std::clamp(hud_pulses.combat_flash_timer / kHudPulseDuration, 0.0f, 1.0f);
 
     // top-left battlefield state panel
-    draw_panel(window, 16, 16, 352, 154, glm::vec3(0.07f, 0.09f, 0.11f), glm::vec3(0.94f, 0.74f, 0.28f));
-    draw_pixel_text(window, 30, 28, "BATTLEFIELD STATUS", 2, glm::vec3(0.95f, 0.96f, 0.98f));
+    draw_panel(window, layout.status_x, layout.status_y, 352, 190, glm::vec3(0.07f, 0.09f, 0.11f), glm::vec3(0.94f, 0.74f, 0.28f));
+    draw_pixel_text(window, layout.status_x + 14, layout.status_y + 12, "BATTLEFIELD STATUS", 2, glm::vec3(0.95f, 0.96f, 0.98f));
     draw_labeled_meter(window,
-                       30,
-                       58,
+                       layout.status_x + 14,
+                       layout.status_y + 42,
                        324,
                        "ORE",
                        std::to_string(ore),
@@ -2169,8 +4330,8 @@ void draw_hud_overlay(SDL_Window* window,
                        glm::mix(glm::vec3(0.76f, 0.60f, 0.14f), glm::vec3(0.96f, 0.82f, 0.22f), resource_flash * 0.45f),
                        glm::vec3(0.22f, 0.18f, 0.10f));
     draw_labeled_meter(window,
-                       30,
-                       92,
+                       layout.status_x + 14,
+                       layout.status_y + 76,
                        324,
                        "SUPPLY",
                        std::to_string(supply_used) + "/" + std::to_string(supply_cap),
@@ -2178,36 +4339,46 @@ void draw_hud_overlay(SDL_Window* window,
                        glm::mix(glm::vec3(0.22f, 0.56f, 0.82f), glm::vec3(0.36f, 0.84f, 1.0f), production_flash * 0.35f),
                        glm::vec3(0.11f, 0.18f, 0.26f));
     draw_labeled_meter(window,
-                       30,
-                       126,
-                       184,
-                       "ARMY",
+                       layout.status_x + 14,
+                       layout.status_y + 110,
+                       324,
+                       "ARMY HP",
                        std::to_string(static_cast<int>(std::round(army_health_ratio * 100.0f))),
                        std::max(army_health_ratio, 0.02f),
                        glm::mix(glm::vec3(0.24f, 0.68f, 0.34f), glm::vec3(0.48f, 0.95f, 0.50f), combat_flash * 0.30f),
                        glm::vec3(0.12f, 0.19f, 0.12f));
-    draw_pixel_text(window,
-                    184,
-                    128,
-                    "BLUE " + std::to_string(blue_units) + "  RED " + std::to_string(red_units),
-                    2,
-                    glm::vec3(0.84f, 0.88f, 0.92f));
-
-    const std::vector<RtsWorldProductionSnapshot> production_snapshots = world.productionSnapshots();
-    const RtsWorldProductionSnapshot* hovered_production = nullptr;
-    if (hovered_building.has_value()) {
-        for (const RtsWorldProductionSnapshot& snapshot : production_snapshots) {
-            if (snapshot.building_id == hovered_building.value() && snapshot.team == 0) {
-                hovered_production = &snapshot;
-                break;
-            }
-        }
-    }
+    draw_screen_rect(window, layout.status_x + 14, layout.status_y + 148, 142, 24, glm::vec3(0.08f, 0.17f, 0.24f));
+    draw_screen_rect(window, layout.status_x + 166, layout.status_y + 148, 172, 24, glm::vec3(0.22f, 0.10f, 0.09f));
+    draw_pixel_text_fit(window,
+                        layout.status_x + 24,
+                        layout.status_y + 154,
+                        "BLUE ARMY " + std::to_string(blue_units),
+                        1,
+                        122,
+                        glm::vec3(0.68f, 0.88f, 1.0f));
+    draw_pixel_text_fit(window,
+                        layout.status_x + 176,
+                        layout.status_y + 154,
+                        "RED VISIBLE " + std::to_string(red_units),
+                        1,
+                        152,
+                        glm::vec3(1.0f, 0.70f, 0.58f));
+    draw_pixel_text_fit(window,
+                        layout.status_x + 14,
+                        layout.status_y + 176,
+                        "F1 FIELD MANUAL",
+                        1,
+                        324,
+                        tutorial_open ? glm::vec3(0.96f, 0.84f, 0.38f)
+                                      : glm::vec3(0.70f, 0.78f, 0.82f));
 
     // center status banner
     std::string banner_text = "COMMAND READY";
     glm::vec3 banner_accent(0.28f, 0.68f, 0.80f);
-    if (world.isMatchOver() && world.winningTeam().has_value()) {
+    if (alert.timer > 0.0f && !alert.message.empty()) {
+        banner_text = alert.message;
+        banner_accent = alert.accent;
+    } else if (world.isMatchOver() && world.winningTeam().has_value()) {
         banner_text = world.winningTeam().value() == 0 ? "VICTORY" : "DEFEAT";
         banner_accent = world.winningTeam().value() == 0
                             ? glm::vec3(0.90f, 0.74f, 0.22f)
@@ -2215,29 +4386,42 @@ void draw_hud_overlay(SDL_Window* window,
     } else if (attack_move_armed) {
         banner_text = "ATTACK MOVE ARMED";
         banner_accent = glm::vec3(0.96f, 0.58f, 0.24f);
+    } else if (command_ui.patrol_mode) {
+        banner_text = "PATROL POINT";
+        banner_accent = glm::vec3(0.48f, 0.82f, 0.42f);
+    } else if (command_ui.guard_mode) {
+        banner_text = "GUARD TARGET";
+        banner_accent = glm::vec3(0.50f, 0.72f, 0.96f);
+    } else if (command_ui.rally_mode) {
+        banner_text = "SET RALLY POINT";
+        banner_accent = glm::vec3(0.34f, 0.82f, 0.92f);
     } else if (build_mode.active) {
         banner_text = "BUILD " + std::string(build_mode.label);
         banner_accent = glm::vec3(0.42f, 0.86f, 0.50f);
+    } else if (building.has_value()) {
+        banner_text = "BUILDING SELECTED";
+        banner_accent = glm::vec3(0.94f, 0.82f, 0.32f);
     }
     const int banner_width = 296;
     draw_panel(window,
-               (kWindowWidth - banner_width) / 2,
+               (layout.screen_w - banner_width) / 2,
                18,
                banner_width,
                50,
                glm::vec3(0.08f, 0.11f, 0.13f),
                banner_accent);
-    draw_pixel_text(window,
-                    (kWindowWidth - pixel_text_width(banner_text, 2)) / 2,
-                    33,
-                    banner_text,
-                    2,
-                    glm::vec3(0.96f, 0.97f, 0.98f));
+    draw_pixel_text_fit(window,
+                        (layout.screen_w - std::min(pixel_text_width(banner_text, 2), banner_width - 24)) / 2,
+                        33,
+                        banner_text,
+                        2,
+                        banner_width - 24,
+                        glm::vec3(0.96f, 0.97f, 0.98f));
 
     // right-side context panel
-    draw_panel(window, 944, 16, 320, 190, glm::vec3(0.07f, 0.09f, 0.11f), glm::vec3(0.30f, 0.76f, 0.88f));
+    draw_panel(window, layout.right_x, layout.right_y, 320, 258, glm::vec3(0.07f, 0.09f, 0.11f), glm::vec3(0.30f, 0.76f, 0.88f));
     if (build_mode.active) {
-        draw_pixel_text(window, 960, 28, "BUILD MODE", 2, glm::vec3(0.95f, 0.97f, 0.98f));
+        draw_pixel_text(window, layout.right_x + 16, layout.right_y + 12, "BUILD MODE", 2, glm::vec3(0.95f, 0.97f, 0.98f));
         const RtsBuildingArchetype* archetype = world.findBuildingArchetype(build_mode.archetype_id);
         const std::vector<std::uint32_t> builders =
             selected_builder_ids(world, unit_visuals, snapshot_map);
@@ -2252,100 +4436,174 @@ void draw_hud_overlay(SDL_Window* window,
         } else if (build_mode.has_preview) {
             state_text = "PLACEMENT BLOCKED";
         }
-        draw_pixel_text(window, 960, 58, std::string(build_mode.label), 3, glm::vec3(0.92f, 0.84f, 0.34f));
+        draw_pixel_text_fit(window, layout.right_x + 16, layout.right_y + 42, std::string(build_mode.label), 3, 288, glm::vec3(0.92f, 0.84f, 0.34f));
         if (archetype && !archetype->cost.empty()) {
             draw_pixel_text(window,
-                            960,
-                            96,
+                            layout.right_x + 16,
+                            layout.right_y + 80,
                             "COST " + std::to_string(archetype->cost.front().amount) + " ORE",
                             2,
                             glm::vec3(0.88f, 0.91f, 0.95f));
         }
         draw_pixel_text(window,
-                        960,
-                        122,
+                        layout.right_x + 16,
+                        layout.right_y + 106,
                         std::to_string(static_cast<int>(builders.size())) + " WORKERS READY",
                         2,
                         glm::vec3(0.80f, 0.90f, 0.96f));
-        draw_pixel_text(window, 960, 150, state_text, 2, glm::vec3(0.46f, 0.90f, 0.52f));
-    } else if (hovered_building.has_value()) {
-        const auto building_snapshot = world.getBuildingSnapshot(hovered_building.value());
+        draw_pixel_text_fit(window, layout.right_x + 16, layout.right_y + 134, state_text, 2, 288, glm::vec3(0.46f, 0.90f, 0.52f));
+    } else if (context_building_id.has_value()) {
+        const auto building_snapshot = world.getBuildingSnapshot(context_building_id.value());
         if (building_snapshot.has_value()) {
+            draw_pixel_text_fit(window,
+                                layout.right_x + 16,
+                                layout.right_y + 12,
+                                readable_building_label(building_snapshot->archetype_id),
+                                3,
+                                288,
+                                glm::vec3(0.95f, 0.97f, 0.98f));
             draw_pixel_text(window,
-                            960,
-                            28,
-                            readable_building_label(building_snapshot->archetype_id),
-                            3,
-                            glm::vec3(0.95f, 0.97f, 0.98f));
-            draw_pixel_text(window,
-                            960,
-                            66,
+                            layout.right_x + 16,
+                            layout.right_y + 50,
                             "TEAM " + team_label(building_snapshot->team),
                             2,
                             building_snapshot->team == 0 ? glm::vec3(0.68f, 0.88f, 1.0f)
                                                          : glm::vec3(1.0f, 0.70f, 0.58f));
+            if (building.has_value()) {
+                draw_pixel_text(window,
+                                layout.right_x + 168,
+                                layout.right_y + 50,
+                                "SELECTED",
+                                1,
+                                glm::vec3(0.98f, 0.88f, 0.34f));
+            }
             draw_pixel_text(window,
-                            960,
-                            92,
+                            layout.right_x + 16,
+                            layout.right_y + 76,
                             "HP " + std::to_string(static_cast<int>(std::round(building_snapshot->health))) +
                                 "/" + std::to_string(static_cast<int>(std::round(building_snapshot->max_health))),
                             2,
                             glm::vec3(0.88f, 0.91f, 0.95f));
             draw_pixel_text(window,
-                            960,
-                            118,
+                            layout.right_x + 16,
+                            layout.right_y + 102,
                             building_snapshot->under_construction ? "UNDER CONSTRUCTION"
                                                                   : "FULLY ONLINE",
                             2,
                             building_snapshot->under_construction ? glm::vec3(0.96f, 0.78f, 0.36f)
                                                                   : glm::vec3(0.48f, 0.90f, 0.54f));
-            if (hovered_production && !hovered_production->queue.empty()) {
-                draw_pixel_text(window, 960, 146, "QUEUE", 2, glm::vec3(0.86f, 0.92f, 0.96f));
-                for (std::size_t i = 0; i < std::min<std::size_t>(hovered_production->queue.size(), 2); ++i) {
+            if (building.has_value()) {
+                const glm::vec3 rally_point = world.productionRallyPoint(building_snapshot->building_id);
+                draw_pixel_text_fit(window,
+                                    layout.right_x + 16,
+                                    layout.right_y + 130,
+                                    "RALLY " +
+                                        std::to_string(static_cast<int>(std::round(rally_point.x))) +
+                                        "," +
+                                        std::to_string(static_cast<int>(std::round(rally_point.z))),
+                                    2,
+                                    288,
+                                    command_ui.rally_mode ? glm::vec3(0.46f, 0.92f, 0.96f)
+                                                          : glm::vec3(0.84f, 0.92f, 0.96f));
+            }
+            if (context_production.has_value() && !context_production->queue.empty()) {
+                draw_pixel_text(window, layout.right_x + 16, layout.right_y + 160, "QUEUE", 2, glm::vec3(0.86f, 0.92f, 0.96f));
+                for (std::size_t i = 0; i < std::min<std::size_t>(context_production->queue.size(), 3); ++i) {
                     const std::string entry_label =
-                        readable_unit_label(hovered_production->queue[i].unit_archetype_id);
-                    draw_pixel_text(window,
-                                    960,
-                                    164 + static_cast<int>(i) * 16,
-                                    std::to_string(static_cast<int>(i + 1)) + " " + entry_label,
-                                    1,
-                                    hovered_production->queue[i].active
-                                        ? glm::vec3(0.98f, 0.84f, 0.34f)
-                                        : glm::vec3(0.76f, 0.82f, 0.86f));
+                        readable_unit_label(context_production->queue[i].unit_archetype_id);
+                    draw_pixel_text_fit(window,
+                                        layout.right_x + 16,
+                                        layout.right_y + 186 + static_cast<int>(i) * 16,
+                                        std::to_string(static_cast<int>(i + 1)) + " " + entry_label,
+                                        1,
+                                        288,
+                                        context_production->queue[i].active
+                                            ? glm::vec3(0.98f, 0.84f, 0.34f)
+                                            : glm::vec3(0.76f, 0.82f, 0.86f));
                 }
             }
         }
     } else {
-        draw_pixel_text(window, 960, 28, "TACTICAL INFO", 2, glm::vec3(0.95f, 0.97f, 0.98f));
-        draw_pixel_text(window, 960, 66, "HOVER A BUILDING", 2, glm::vec3(0.80f, 0.88f, 0.92f));
-        draw_pixel_text(window, 960, 92, "FOR PRODUCTION", 2, glm::vec3(0.80f, 0.88f, 0.92f));
-        draw_pixel_text(window, 960, 132, "SHIFT RMB TO QUEUE", 2, glm::vec3(0.92f, 0.84f, 0.36f));
-        draw_pixel_text(window, 960, 158, "ORDERS", 2, glm::vec3(0.92f, 0.84f, 0.36f));
+        draw_pixel_text(window, layout.right_x + 16, layout.right_y + 12, "SHOWCASE FLOW", 2, glm::vec3(0.95f, 0.97f, 0.98f));
+        draw_pixel_text(window,
+                        layout.right_x + 16,
+                        layout.right_y + 40,
+                        "TIME " + std::to_string(static_cast<int>(director.elapsed_seconds)) + "S",
+                        2,
+                        glm::vec3(0.92f, 0.84f, 0.36f));
+        draw_pixel_text(window, layout.right_x + 16, layout.right_y + 66, "ASSAULT > SCOUT", 1, glm::vec3(0.82f, 0.90f, 0.96f));
+        draw_pixel_text(window, layout.right_x + 16, layout.right_y + 82, "SCOUT > HEAVY", 1, glm::vec3(0.82f, 0.90f, 0.96f));
+        draw_pixel_text(window, layout.right_x + 16, layout.right_y + 98, "HEAVY > ASSAULT", 1, glm::vec3(0.82f, 0.90f, 0.96f));
+        draw_pixel_text(window, layout.right_x + 16, layout.right_y + 120, "DASHER FAST  LANCER RANGE", 1, glm::vec3(0.78f, 0.86f, 0.92f));
+        draw_pixel_text(window, layout.right_x + 16, layout.right_y + 136, "BRUTE TANKS FRONT LINE", 1, glm::vec3(0.78f, 0.86f, 0.92f));
+        for (std::size_t i = 0; i < std::min<std::size_t>(director.feed_lines.size(), 4); ++i) {
+            draw_pixel_text_fit(window,
+                                layout.right_x + 16,
+                                layout.right_y + 166 + static_cast<int>(i) * 16,
+                                director.feed_lines[i],
+                                1,
+                                288,
+                                i == 0 ? glm::vec3(0.96f, 0.84f, 0.38f)
+                                       : glm::vec3(0.72f, 0.82f, 0.88f));
+        }
     }
 
     // bottom-left selection panel
-    draw_panel(window, 16, 536, 352, 168, glm::vec3(0.07f, 0.09f, 0.11f), glm::vec3(0.96f, 0.84f, 0.30f));
-    draw_pixel_text(window, 30, 548, "SELECTION", 2, glm::vec3(0.95f, 0.97f, 0.98f));
-    if (selected_ids.empty()) {
-        draw_pixel_text(window, 30, 582, "NO UNITS SELECTED", 2, glm::vec3(0.78f, 0.84f, 0.88f));
-        draw_pixel_text(window, 30, 612, "DRAG OR CLICK TO", 2, glm::vec3(0.78f, 0.84f, 0.88f));
-        draw_pixel_text(window, 30, 638, "FORM A SQUAD", 2, glm::vec3(0.78f, 0.84f, 0.88f));
+    draw_panel(window, layout.selection_x, layout.bottom_y, 352, 168, glm::vec3(0.07f, 0.09f, 0.11f), glm::vec3(0.96f, 0.84f, 0.30f));
+    draw_pixel_text(window, layout.selection_x + 14, layout.bottom_y + 12, "SELECTION", 2, glm::vec3(0.95f, 0.97f, 0.98f));
+    if (selected_ids.empty() && building.has_value()) {
+        draw_pixel_text_fit(window,
+                            layout.selection_x + 14,
+                            layout.bottom_y + 44,
+                            readable_building_label(building->archetype_id),
+                            3,
+                            320,
+                            glm::vec3(0.97f, 0.90f, 0.36f));
+        draw_pixel_text(window,
+                        layout.selection_x + 14,
+                        layout.bottom_y + 82,
+                        "HP " + std::to_string(static_cast<int>(std::round(building->health))) + "/" +
+                            std::to_string(static_cast<int>(std::round(building->max_health))),
+                        2,
+                        glm::vec3(0.86f, 0.92f, 0.96f));
+        draw_pixel_text(window,
+                        layout.selection_x + 14,
+                        layout.bottom_y + 108,
+                        building->under_construction ? "CONSTRUCTION ACTIVE"
+                                                     : "PRODUCTION READY",
+                        2,
+                        building->under_construction ? glm::vec3(0.96f, 0.78f, 0.36f)
+                                                     : glm::vec3(0.48f, 0.90f, 0.54f));
+        if (context_production.has_value()) {
+            draw_pixel_text(window,
+                            layout.selection_x + 14,
+                            layout.bottom_y + 134,
+                            "QUEUE " + std::to_string(static_cast<int>(context_production->queue.size())),
+                            2,
+                            glm::vec3(0.80f, 0.90f, 0.98f));
+        }
+    } else if (selected_ids.empty()) {
+        draw_pixel_text(window, layout.selection_x + 14, layout.bottom_y + 46, "NO UNITS SELECTED", 2, glm::vec3(0.78f, 0.84f, 0.88f));
+        draw_pixel_text(window, layout.selection_x + 14, layout.bottom_y + 76, "DRAG OR CLICK TO", 2, glm::vec3(0.78f, 0.84f, 0.88f));
+        draw_pixel_text(window, layout.selection_x + 14, layout.bottom_y + 102, "FORM A SQUAD OR", 2, glm::vec3(0.78f, 0.84f, 0.88f));
+        draw_pixel_text(window, layout.selection_x + 14, layout.bottom_y + 128, "SELECT A BUILDING", 2, glm::vec3(0.78f, 0.84f, 0.88f));
     } else {
         draw_pixel_text(window,
-                        30,
-                        580,
+                        layout.selection_x + 14,
+                        layout.bottom_y + 44,
                         std::to_string(static_cast<int>(selected_ids.size())) + " UNITS",
                         3,
                         glm::vec3(0.97f, 0.90f, 0.36f));
-        draw_pixel_text(window,
-                        30,
-                        618,
-                        std::to_string(selected_workers) + " WORKERS  CARRY " + std::to_string(carried_total) + " ORE",
-                        2,
-                        glm::vec3(0.86f, 0.92f, 0.96f));
+        draw_pixel_text_fit(window,
+                            layout.selection_x + 14,
+                            layout.bottom_y + 82,
+                            std::to_string(selected_workers) + " WORKERS  CARRY " + std::to_string(carried_total) + " ORE",
+                            2,
+                            320,
+                            glm::vec3(0.86f, 0.92f, 0.96f));
         draw_labeled_meter(window,
-                           30,
-                           646,
+                           layout.selection_x + 14,
+                           layout.bottom_y + 110,
                            200,
                            "AVG HP",
                            std::to_string(static_cast<int>(std::round(average_health_ratio * 100.0f))),
@@ -2353,24 +4611,27 @@ void draw_hud_overlay(SDL_Window* window,
                            glm::vec3(0.34f, 0.84f, 0.42f),
                            glm::vec3(0.14f, 0.18f, 0.14f));
         for (std::size_t i = 0; i < std::min<std::size_t>(composition.size(), 3); ++i) {
-            draw_pixel_text(window,
-                            240,
-                            582 + static_cast<int>(i) * 22,
-                            std::to_string(composition[i].second) + " " + composition[i].first,
-                            2,
-                            glm::vec3(0.80f, 0.90f, 0.98f));
+            draw_pixel_text_fit(window,
+                                layout.selection_x + 224,
+                                layout.bottom_y + 46 + static_cast<int>(i) * 22,
+                                std::to_string(composition[i].second) + " " + composition[i].first,
+                                2,
+                                112,
+                                glm::vec3(0.80f, 0.90f, 0.98f));
         }
     }
 
-    // bottom-center command legend
-    draw_panel(window, 392, 580, 484, 124, glm::vec3(0.07f, 0.09f, 0.11f), glm::vec3(0.34f, 0.72f, 0.95f));
-    draw_pixel_text(window, 408, 592, "TACTICAL CONTROLS", 2, glm::vec3(0.95f, 0.97f, 0.98f));
-    draw_pixel_text(window, 408, 620, "LMB SELECT   RMB COMMAND", 2, glm::vec3(0.84f, 0.90f, 0.94f));
-    draw_pixel_text(window, 408, 644, "SHIFT RMB QUEUE   A ATTACK MOVE", 2, glm::vec3(0.84f, 0.90f, 0.94f));
-    draw_pixel_text(window, 408, 668, "B FARM  N DEPOT  R CANCEL BUILD", 2, glm::vec3(0.84f, 0.90f, 0.94f));
-    draw_pixel_text(window, 408, 692, "Q WORKER  E INFANTRY  X DEMOLISH", 2, glm::vec3(0.84f, 0.90f, 0.94f));
+    // bottom-center command card
+    draw_panel(window, layout.command_x, layout.bottom_y, 484, 168, glm::vec3(0.07f, 0.09f, 0.11f), glm::vec3(0.34f, 0.72f, 0.95f));
+    draw_pixel_text(window, layout.command_x + 16, layout.bottom_y + 12, "COMMAND CARD", 2, glm::vec3(0.95f, 0.97f, 0.98f));
+    for (const CommandButton& button : command_buttons) {
+        draw_command_button(window, button);
+    }
 
-    draw_minimap_panel(window, 1042, 498, world, camera, unit_snapshots, unit_visuals);
+    draw_minimap_panel(window, layout.minimap_x, layout.minimap_y, world, camera, unit_snapshots, unit_visuals);
+    if (tutorial_open) {
+        draw_tutorial_overlay(window);
+    }
 }
 
 void update_build_preview(SDL_Window* window,
@@ -2439,9 +4700,12 @@ int main() {
     }
     SDL_Manager& sdl = *sdl_ptr;
 
-    if (!sdl.spawnWindowAt("RTS Demo", kWindowWidth, kWindowHeight, 110, 70, SDL_TRUE)) {
+    if (!sdl.spawnWindowAt(kDemoWindowTitle, kWindowWidth, kWindowHeight, 110, 70, SDL_TRUE)) {
         LOG_ERROR(get_logger(), "Failed to create RTS demo window");
         return 1;
+    }
+    if (SDL_Window* demo_window = sdl.windowAt(0)) {
+        SDL_SetWindowMinimumSize(demo_window, kWindowWidth, kWindowHeight);
     }
     if (!sdl.makeOpenGLCurrentAt(0)) {
         LOG_ERROR(get_logger(), "Failed to bind OpenGL context for RTS demo");
@@ -2466,25 +4730,65 @@ int main() {
     }
 
     RtsWorld world(kTerrainGridWidth, kTerrainGridHeight, kTerrainCellSize, terrain_origin());
+    std::vector<std::uint32_t> scenario_blue_ids{};
     // seed gameplay data in a deterministic order so the demo always opens in the same scenario
-    paint_demo_terrain(world.terrain());
+    if (kMassBattleDemo) {
+        paint_mass_battle_layout(world.terrain());
+    } else if (kPathfindingLabDemo) {
+        paint_pathfinding_lab_layout(world.terrain());
+    } else if (kBuildingSiegeDemo) {
+        paint_building_siege_layout(world.terrain());
+    } else if (kAiVsAiBattleDemo) {
+        paint_ai_battle_layout(world.terrain());
+    } else if (kStressTestDemo) {
+        paint_stress_test_layout(world.terrain());
+    } else {
+        paint_demo_terrain(world.terrain());
+    }
     register_demo_archetypes(world);
-    seed_demo_buildings(world);
-    seed_demo_units(world);
-    seed_demo_economy(world);
-    configure_demo_enemy_ai(world);
+    if (kMassBattleDemo) {
+        seed_mass_battle_scenario(world, scenario_blue_ids);
+    } else if (kPathfindingLabDemo) {
+        seed_pathfinding_lab_scenario(world, scenario_blue_ids);
+    } else if (kBuildingSiegeDemo) {
+        seed_building_siege_scenario(world, scenario_blue_ids);
+    } else if (kAiVsAiBattleDemo) {
+        seed_ai_vs_ai_battle_scenario(world, scenario_blue_ids);
+    } else if (kStressTestDemo) {
+        seed_stress_test_scenario(world, scenario_blue_ids);
+    } else {
+        seed_demo_buildings(world);
+        seed_demo_units(world);
+        seed_demo_economy(world);
+        configure_demo_enemy_ai(world);
+    }
     const std::vector<BuildingStyle> building_styles = build_building_styles();
 
     SceneGraph scene_graph{};
     // low leaf capacity makes the spatial index subdivide aggressively enough to be interesting in the demo
     scene_graph.setMaxLeafObjects(3);
     std::unordered_map<std::uint32_t, UnitVisualState> unit_visuals{};
+    std::array<std::vector<std::uint32_t>, 3> control_groups{};
+    if (kScenarioVariantDemo) {
+        control_groups[0] = scenario_blue_ids;
+    }
     std::vector<RtsWorldUnitSnapshot> unit_snapshots = world.unitSnapshots();
     sync_units_to_scene_graph(scene_graph, unit_snapshots, unit_visuals);
 
     CameraState camera{};
-    camera.focus = glm::vec3(0.0f);
-    camera.zoom = kDefaultZoom;
+    if (kMassBattleDemo || kStressTestDemo || kPathfindingLabDemo) {
+        camera.focus = world.terrain().cellCenter(GridCoord{64, 64});
+        camera.zoom = kStressTestDemo ? 46.0f : 42.0f;
+    } else if (kBuildingSiegeDemo) {
+        camera.focus = world.terrain().cellCenter(GridCoord{58, 76});
+        camera.zoom = 34.0f;
+    } else if (kAiVsAiBattleDemo) {
+        camera.focus = world.terrain().cellCenter(GridCoord{64, 64});
+        camera.zoom = 38.0f;
+    } else {
+        camera.focus = world.terrain().cellCenter(GridCoord{24, 99});
+        camera.zoom = kDefaultZoom;
+    }
 
     SelectionState selection{};
     selection.dragging = false;
@@ -2503,12 +4807,82 @@ int main() {
     build_mode.placement_valid = false;
 
     bool attack_move_armed = false;
+    CommandUiState command_ui{std::nullopt, false, false, false};
     std::optional<std::uint32_t> hovered_building{};
     HudPulseState hud_pulses{0.0f, 0.0f, 0.0f};
+    AlertState alert{"", 0.0f, glm::vec3(0.90f, 0.36f, 0.28f)};
+    bool tutorial_open = true;
+    DemoDirectorState director{
+        0.0f,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        kFirstShowcaseUnitId,
+        std::nullopt,
+        {}
+    };
+    if (kMassBattleDemo) {
+        director.feed_lines = {
+            "100 V 100 MASS ATTACK",
+            "ONLY ATTACK MOVE ORDERS",
+            "FIVE ROUTES PER SIDE",
+            "CTRL GROUP 1 HAS BLUE ARMY"
+        };
+    } else if (kPathfindingLabDemo) {
+        director.feed_lines = {
+            "PATHFINDING LAB ONLINE",
+            "MAZE WALLS AND WATER GATES",
+            "QUEUED ROUTES ARE ACTIVE",
+            "PRESS 1 FOR BLUE TEST SQUADS"
+        };
+    } else if (kBuildingSiegeDemo) {
+        director.feed_lines = {
+            "FORTRESS SIEGE STARTED",
+            "TOWERS AND REPAIR CREWS",
+            "RED ARTILLERY IS INBOUND",
+            "PRESS 1 FOR DEFENDERS"
+        };
+    } else if (kAiVsAiBattleDemo) {
+        director.feed_lines = {
+            "AI VS AI AUTONOMY",
+            "BOTH TEAMS HARVEST BUILD",
+            "PRODUCTION AND ATTACKS ENABLED",
+            "WATCH ECONOMY ESCALATE"
+        };
+    } else if (kStressTestDemo) {
+        director.feed_lines = {
+            "STRESS TEST 512 UNITS",
+            "THREE COLLISION LANES",
+            "FORMATION ATTACK MOVE LOAD",
+            "PRESS 1 FOR BLUE SWARM"
+        };
+    }
 
     // controls are logged once because the on screen hud is intentionally graphical rather than text based
-    LOG_INFO(get_logger(),
-             "RTS demo controls: LMB select, RMB move/attack/repair/place, Shift+RMB queue, arrow keys pan, mouse wheel zoom, A arm attack-move, S stop, H hold, B/N build with workers, Q queue worker at hovered depot, E queue infantry at hovered depot, X demolish hovered building");
+    std::string control_log =
+        "RTS demo controls: F1 toggles the field manual, LMB select units or friendly buildings, RMB command or set rally, Shift+RMB queue, arrow keys pan, mouse wheel zoom, A attack-move, P patrol, G guard, S stop, H hold, B/N/C/T build with workers, Q/E/Z/V queue selected building, 1-3 control groups, Backspace cancel queue, Shift+Backspace clear queue, X demolish selected building";
+    if (kMassBattleDemo) {
+        control_log =
+            "RTS mass battle demo: 100 blue units and 100 red units attack through five complex routes. F1 toggles the field manual, 1 recalls the blue army, arrow keys pan, mouse wheel zoom, A attack-move, P patrol, G guard, S stop, H hold.";
+    } else if (kPathfindingLabDemo) {
+        control_log =
+            "RTS pathfinding lab demo: queued attack-move routes run through maze-like terrain. F1 toggles the field manual, 1 recalls the blue test squads, arrow keys pan, mouse wheel zoom.";
+    } else if (kBuildingSiegeDemo) {
+        control_log =
+            "RTS building siege demo: red waves attack a fortified blue base with towers, repairs, and artillery. F1 toggles the field manual, 1 recalls defenders.";
+    } else if (kAiVsAiBattleDemo) {
+        control_log =
+            "RTS AI vs AI battle demo: both teams harvest, produce, and attack without player direction. F1 toggles the field manual.";
+    } else if (kStressTestDemo) {
+        control_log =
+            "RTS stress test demo: 512 units collide across three attack lanes. F1 toggles the field manual, 1 recalls the blue swarm.";
+    }
+    LOG_INFO(get_logger(), "{}", control_log);
 
     using EngineClock = std::chrono::steady_clock;
     EngineClock::time_point previous_time = EngineClock::now();
@@ -2523,9 +4897,192 @@ int main() {
 
         unit_snapshots = world.unitSnapshots();
         auto snapshot_map = snapshot_map_from_vector(unit_snapshots);
+        SDL_Window* window = sdl.windowAt(0);
+        const HudLayout hud_layout = build_hud_layout(window);
+        const std::vector<CommandButton> command_buttons =
+            build_command_buttons(world,
+                                  unit_visuals,
+                                  snapshot_map,
+                                  build_mode,
+                                  attack_move_armed,
+                                  command_ui,
+                                  hud_layout);
+
+        auto execute_command_button = [&](CommandButtonId button_id) {
+            const std::vector<std::uint32_t> selected_ids =
+                selected_unit_ids(unit_visuals, snapshot_map);
+            const auto building = selected_building_snapshot(world, command_ui);
+            switch (button_id) {
+            case CommandButtonId::attack_move:
+                attack_move_armed = true;
+                command_ui.rally_mode = false;
+                command_ui.patrol_mode = false;
+                command_ui.guard_mode = false;
+                cancel_build_mode(build_mode);
+                break;
+            case CommandButtonId::patrol:
+                attack_move_armed = false;
+                command_ui.rally_mode = false;
+                command_ui.patrol_mode = true;
+                command_ui.guard_mode = false;
+                cancel_build_mode(build_mode);
+                break;
+            case CommandButtonId::guard:
+                attack_move_armed = false;
+                command_ui.rally_mode = false;
+                command_ui.patrol_mode = false;
+                command_ui.guard_mode = true;
+                cancel_build_mode(build_mode);
+                break;
+            case CommandButtonId::stop:
+                for (const std::uint32_t unit_id : selected_ids) {
+                    world.issueOrder(unit_id, RtsOrder{
+                        RtsOrderType::stop,
+                        glm::vec3(0.0f),
+                        glm::vec3(0.0f),
+                        0,
+                        0.0f,
+                        0.0f
+                    });
+                }
+                clear_tactical_modes(command_ui, attack_move_armed);
+                break;
+            case CommandButtonId::hold_position:
+                for (const std::uint32_t unit_id : selected_ids) {
+                    world.issueOrder(unit_id, RtsOrder{
+                        RtsOrderType::hold_position,
+                        glm::vec3(0.0f),
+                        glm::vec3(0.0f),
+                        0,
+                        0.0f,
+                        0.0f
+                    });
+                }
+                clear_tactical_modes(command_ui, attack_move_armed);
+                break;
+            case CommandButtonId::build_farm:
+                activate_build_mode(build_mode,
+                                    command_ui,
+                                    attack_move_armed,
+                                    kBuildingFarm,
+                                    glm::vec3(0.76f, 0.66f, 0.28f),
+                                    0.78f,
+                                    "Farm");
+                break;
+            case CommandButtonId::build_depot:
+                activate_build_mode(build_mode,
+                                    command_ui,
+                                    attack_move_armed,
+                                    kBuildingDepot,
+                                    glm::vec3(0.52f, 0.41f, 0.28f),
+                                    1.08f,
+                                    "Depot");
+                break;
+            case CommandButtonId::build_barracks:
+                activate_build_mode(build_mode,
+                                    command_ui,
+                                    attack_move_armed,
+                                    kBuildingBarracks,
+                                    glm::vec3(0.45f, 0.34f, 0.58f),
+                                    1.18f,
+                                    "Barracks");
+                break;
+            case CommandButtonId::build_tower:
+                activate_build_mode(build_mode,
+                                    command_ui,
+                                    attack_move_armed,
+                                    kBuildingTower,
+                                    glm::vec3(0.41f, 0.40f, 0.46f),
+                                    1.45f,
+                                    "Tower");
+                break;
+            case CommandButtonId::cancel_build_mode:
+                clear_tactical_modes(command_ui, attack_move_armed);
+                cancel_build_mode(build_mode);
+                break;
+            case CommandButtonId::queue_worker:
+                if (building.has_value()) {
+                    if (!world.enqueueProduction(building->building_id, kUnitArchetypeWorker)) {
+                        push_alert(alert,
+                                   production_block_reason(world, *building, kUnitArchetypeWorker),
+                                   glm::vec3(0.94f, 0.38f, 0.28f));
+                    }
+                }
+                break;
+            case CommandButtonId::queue_infantry:
+                if (building.has_value()) {
+                    if (!world.enqueueProduction(building->building_id, kUnitArchetypePlayer)) {
+                        push_alert(alert,
+                                   production_block_reason(world, *building, kUnitArchetypePlayer),
+                                   glm::vec3(0.94f, 0.38f, 0.28f));
+                    }
+                }
+                break;
+            case CommandButtonId::queue_scout:
+                if (building.has_value()) {
+                    if (!world.enqueueProduction(building->building_id, kUnitArchetypePlayerScout)) {
+                        push_alert(alert,
+                                   production_block_reason(world, *building, kUnitArchetypePlayerScout),
+                                   glm::vec3(0.94f, 0.38f, 0.28f));
+                    }
+                }
+                break;
+            case CommandButtonId::queue_heavy:
+                if (building.has_value()) {
+                    if (!world.enqueueProduction(building->building_id, kUnitArchetypePlayerHeavy)) {
+                        push_alert(alert,
+                                   production_block_reason(world, *building, kUnitArchetypePlayerHeavy),
+                                   glm::vec3(0.94f, 0.38f, 0.28f));
+                    }
+                }
+                break;
+            case CommandButtonId::cancel_queue:
+                if (building.has_value()) {
+                    world.cancelLastProduction(building->building_id, true);
+                }
+                break;
+            case CommandButtonId::clear_queue:
+                if (building.has_value()) {
+                    world.clearProductionQueue(building->building_id, true);
+                }
+                break;
+            case CommandButtonId::set_rally:
+                if (building.has_value()) {
+                    attack_move_armed = false;
+                    cancel_build_mode(build_mode);
+                    command_ui.rally_mode = true;
+                    command_ui.patrol_mode = false;
+                    command_ui.guard_mode = false;
+                }
+                break;
+            case CommandButtonId::select_idle_worker:
+                if (!select_idle_worker(world, unit_visuals, snapshot_map)) {
+                    push_alert(alert, "NO IDLE WORKER", glm::vec3(0.94f, 0.54f, 0.22f));
+                } else {
+                    clear_building_selection(command_ui);
+                    cancel_build_mode(build_mode);
+                    attack_move_armed = false;
+                }
+                break;
+            case CommandButtonId::select_army:
+                if (!select_player_army(world, unit_visuals, snapshot_map)) {
+                    push_alert(alert, "NO ARMY UNITS", glm::vec3(0.94f, 0.54f, 0.22f));
+                } else {
+                    clear_building_selection(command_ui);
+                    cancel_build_mode(build_mode);
+                    attack_move_armed = false;
+                }
+                break;
+            case CommandButtonId::demolish:
+                if (building.has_value()) {
+                    world.removeBuilding(building->building_id);
+                    clear_building_selection(command_ui);
+                }
+                break;
+            }
+        };
 
         SDL_Event event{};
-        SDL_Window* window = sdl.windowAt(0);
         while (SDL_PollEvent(&event)) {
             switch (event.type) {
             case SDL_QUIT:
@@ -2537,13 +5094,31 @@ int main() {
                 }
                 break;
             case SDL_MOUSEWHEEL:
+                if (tutorial_open) {
+                    break;
+                }
                 // orthographic zoom changes visible area instead of perspective
                 camera.zoom = std::clamp(camera.zoom - static_cast<float>(event.wheel.y) * 0.45f,
                                          kMinZoom,
                                          kMaxZoom);
                 break;
             case SDL_MOUSEBUTTONDOWN:
+                if (tutorial_open) {
+                    break;
+                }
                 if (event.button.button == SDL_BUTTON_LEFT) {
+                    bool button_consumed = false;
+                    for (const CommandButton& button : command_buttons) {
+                        if (button.enabled &&
+                            point_in_rect(button.rect, event.button.x, event.button.y)) {
+                            execute_command_button(button.id);
+                            button_consumed = true;
+                            break;
+                        }
+                    }
+                    if (button_consumed) {
+                        break;
+                    }
                     // left mouse always begins as a potential drag
                     // the release logic later decides whether it was a box select or just a click
                     selection.dragging = true;
@@ -2560,6 +5135,11 @@ int main() {
                         if (build_mode.has_preview && build_mode.placement_valid) {
                             const std::vector<std::uint32_t> builder_ids =
                                 selected_builder_ids(world, unit_visuals, snapshot_map);
+                            if (builder_ids.empty()) {
+                                push_alert(alert, "SELECT A WORKER", glm::vec3(0.94f, 0.54f, 0.22f));
+                                break;
+                            }
+                            bool placed_building = false;
                             for (const std::uint32_t builder_id : builder_ids) {
                                 const auto building_id =
                                     world.startBuildingConstruction(0,
@@ -2575,10 +5155,24 @@ int main() {
                                         world.issueRepairOrder(helper_id, building_id.value());
                                     }
                                 }
-                                build_mode.active = false;
-                                build_mode.has_preview = false;
+                                cancel_build_mode(build_mode);
+                                command_ui.rally_mode = false;
+                                placed_building = true;
                                 break;
                             }
+                            if (!placed_building) {
+                                const RtsBuildingArchetype* archetype =
+                                    world.findBuildingArchetype(build_mode.archetype_id);
+                                push_alert(alert,
+                                           archetype && !world.canAffordCosts(0, archetype->cost)
+                                               ? "NEED MORE ORE"
+                                               : "PLACEMENT BLOCKED",
+                                           glm::vec3(0.94f, 0.38f, 0.28f));
+                            }
+                        } else {
+                            push_alert(alert,
+                                       build_mode.has_preview ? "PLACEMENT BLOCKED" : "MOVE CURSOR",
+                                       glm::vec3(0.94f, 0.38f, 0.28f));
                         }
                     } else {
                         const glm::mat4 projection = build_isometric_projection(window, camera.zoom);
@@ -2591,12 +5185,60 @@ int main() {
                                     building_id_at_hit(world.terrain(), world.buildings(), hit_point);
                                 const RtsWorldResourceNodeSnapshot* resource_node =
                                     find_resource_node_at_hit(world.resourceNodeSnapshots(), hit_point);
+                                if (resource_node &&
+                                    world.cellVisibilityForTeam(0, resource_node->cell) ==
+                                        VisibilityState::unexplored) {
+                                    resource_node = nullptr;
+                                }
                                 const RtsWorldUnitSnapshot* attacked_unit =
-                                    find_enemy_unit_at_hit(snapshot_map, hit_point);
-                                const auto hit_building = hit_building_id.has_value()
-                                                              ? world.getBuildingSnapshot(hit_building_id.value())
-                                                              : std::nullopt;
-                                if (resource_node) {
+                                    find_enemy_unit_at_hit(world, snapshot_map, hit_point);
+                                auto hit_building = hit_building_id.has_value()
+                                                        ? world.getBuildingSnapshot(hit_building_id.value())
+                                                        : std::nullopt;
+                                if (hit_building.has_value() &&
+                                    hit_building->team != 0 &&
+                                    !world.isBuildingVisibleToTeam(0, hit_building->building_id)) {
+                                    hit_building = std::nullopt;
+                                }
+                                if (command_ui.patrol_mode) {
+                                    for (const std::uint32_t unit_id : selected_ids) {
+                                        const auto unit_it = snapshot_map.find(unit_id);
+                                        if (unit_it == snapshot_map.end()) {
+                                            continue;
+                                        }
+                                        world.issueOrder(unit_id,
+                                                         RtsOrder{
+                                                             RtsOrderType::patrol,
+                                                             hit_point,
+                                                             unit_it->second.position,
+                                                             0,
+                                                             0.0f,
+                                                             0.18f
+                                                         },
+                                                         queue_commands);
+                                    }
+                                    clear_tactical_modes(command_ui, attack_move_armed);
+                                } else if (command_ui.guard_mode) {
+                                    const RtsWorldUnitSnapshot* guard_target =
+                                        find_friendly_unit_at_hit(snapshot_map, hit_point, selected_ids);
+                                    if (guard_target) {
+                                        for (const std::uint32_t unit_id : selected_ids) {
+                                            world.issueOrder(unit_id,
+                                                             RtsOrder{
+                                                                 RtsOrderType::guard,
+                                                                 guard_target->position,
+                                                                 glm::vec3(0.0f),
+                                                                 guard_target->unit_id,
+                                                                 0.0f,
+                                                                 0.18f
+                                                             },
+                                                             queue_commands);
+                                        }
+                                        clear_tactical_modes(command_ui, attack_move_armed);
+                                    } else {
+                                        push_alert(alert, "CLICK FRIENDLY", glm::vec3(0.94f, 0.54f, 0.22f));
+                                    }
+                                } else if (resource_node) {
                                     // harvest gets sent to every selected unit and non workers will simply ignore it
                                     for (const std::uint32_t unit_id : selected_ids) {
                                         world.issueOrder(unit_id, RtsOrder{
@@ -2642,18 +5284,31 @@ int main() {
                                                               kFormationSpacing,
                                                               queue_commands);
                                 }
+                            } else if (command_ui.selected_building_id.has_value()) {
+                                world.setProductionRallyPoint(command_ui.selected_building_id.value(),
+                                                              hit_point);
+                                command_ui.rally_mode = false;
                             }
-                            attack_move_armed = false;
+                            if (!command_ui.guard_mode) {
+                                attack_move_armed = false;
+                            }
                         }
                     }
                 }
                 break;
             case SDL_MOUSEMOTION:
+                if (tutorial_open) {
+                    break;
+                }
                 if (selection.dragging) {
                     selection.current = SDL_Point{event.motion.x, event.motion.y};
                 }
                 break;
             case SDL_MOUSEBUTTONUP:
+                if (tutorial_open) {
+                    selection.dragging = false;
+                    break;
+                }
                 if (event.button.button == SDL_BUTTON_LEFT && selection.dragging && window) {
                     selection.dragging = false;
                     selection.current = SDL_Point{event.button.x, event.button.y};
@@ -2673,6 +5328,7 @@ int main() {
                                                          selection.start.x, selection.start.y, corner_a) &&
                             intersect_ground_from_cursor(window, view, projection,
                                                          selection.current.x, selection.current.y, corner_b)) {
+                            clear_building_selection(command_ui);
                             apply_selection_box(scene_graph,
                                                 snapshot_map,
                                                 unit_visuals,
@@ -2695,7 +5351,7 @@ int main() {
                                     const auto attacked_building_id =
                                         building_id_at_hit(world.terrain(), world.buildings(), hit_point);
                                     const RtsWorldUnitSnapshot* attacked_unit =
-                                        find_enemy_unit_at_hit(snapshot_map, hit_point);
+                                        find_enemy_unit_at_hit(world, snapshot_map, hit_point);
                                     if (attacked_unit) {
                                         world.issueFormationOrder(selected_ids,
                                                                   attacked_unit->position,
@@ -2706,7 +5362,9 @@ int main() {
                                     } else if (attacked_building_id.has_value()) {
                                         const auto attacked_building =
                                             world.getBuildingSnapshot(attacked_building_id.value());
-                                        if (attacked_building.has_value() && attacked_building->team != 0) {
+                                        if (attacked_building.has_value() &&
+                                            attacked_building->team != 0 &&
+                                            world.isBuildingVisibleToTeam(0, attacked_building->building_id)) {
                                             world.issueFormationOrder(selected_ids,
                                                                       attacked_building->center,
                                                                       RtsOrderType::attack_move,
@@ -2729,76 +5387,97 @@ int main() {
                                 }
                                 attack_move_armed = false;
                             } else {
-                                apply_click_selection(hit_point, snapshot_map, unit_visuals, additive);
+                                const bool selected_unit =
+                                    apply_click_selection(hit_point, snapshot_map, unit_visuals, additive);
+                                if (selected_unit) {
+                                    clear_building_selection(command_ui);
+                                } else if (const auto building_id =
+                                               friendly_building_id_at_hit(world, hit_point);
+                                           building_id.has_value()) {
+                                    clear_selection(unit_visuals, snapshot_map);
+                                    command_ui.selected_building_id = building_id;
+                                    command_ui.rally_mode = false;
+                                } else if (!additive) {
+                                    clear_building_selection(command_ui);
+                                }
                             }
                         } else if (!additive) {
                             clear_selection(unit_visuals, snapshot_map);
+                            clear_building_selection(command_ui);
                         }
                     }
                 }
                 break;
             case SDL_KEYDOWN:
-                if (event.key.keysym.sym == SDLK_ESCAPE) {
+                if (event.key.keysym.sym == SDLK_F1) {
+                    tutorial_open = !tutorial_open;
+                } else if (event.key.keysym.sym == SDLK_ESCAPE) {
                     running = false;
+                } else if (tutorial_open) {
+                    break;
+                } else if (event.key.keysym.sym >= SDLK_1 && event.key.keysym.sym <= SDLK_3) {
+                    const int group_index = static_cast<int>(event.key.keysym.sym - SDLK_1);
+                    if ((SDL_GetModState() & KMOD_CTRL) != 0) {
+                        control_groups[static_cast<std::size_t>(group_index)] =
+                            selected_unit_ids(unit_visuals, snapshot_map);
+                        push_alert(alert,
+                                   "GROUP " + std::to_string(group_index + 1) + " SET",
+                                   glm::vec3(0.34f, 0.78f, 0.92f));
+                    } else {
+                        select_units_by_ids(unit_visuals,
+                                            snapshot_map,
+                                            control_groups[static_cast<std::size_t>(group_index)]);
+                        clear_building_selection(command_ui);
+                        cancel_build_mode(build_mode);
+                        attack_move_armed = false;
+                    }
                 } else if (event.key.keysym.sym == SDLK_a) {
                     // arm attack move for the next click or right click target
                     attack_move_armed = true;
-                    build_mode.active = false;
-                    build_mode.has_preview = false;
+                    command_ui.rally_mode = false;
+                    command_ui.patrol_mode = false;
+                    command_ui.guard_mode = false;
+                    cancel_build_mode(build_mode);
+                } else if (event.key.keysym.sym == SDLK_p) {
+                    execute_command_button(CommandButtonId::patrol);
+                } else if (event.key.keysym.sym == SDLK_g) {
+                    execute_command_button(CommandButtonId::guard);
                 } else if (event.key.keysym.sym == SDLK_s) {
-                    // explicit stop orders are sent per unit because the world api is unit centric here
-                    for (const std::uint32_t unit_id : selected_unit_ids(unit_visuals, snapshot_map)) {
-                        world.issueOrder(unit_id, RtsOrder{
-                            RtsOrderType::stop,
-                            glm::vec3(0.0f),
-                            glm::vec3(0.0f),
-                            0,
-                            0.0f,
-                            0.0f
-                        });
-                    }
-                    attack_move_armed = false;
+                    execute_command_button(CommandButtonId::stop);
                 } else if (event.key.keysym.sym == SDLK_h) {
-                    // hold position prevents travel but still lets units defend themselves
-                    for (const std::uint32_t unit_id : selected_unit_ids(unit_visuals, snapshot_map)) {
-                        world.issueOrder(unit_id, RtsOrder{
-                            RtsOrderType::hold_position,
-                            glm::vec3(0.0f),
-                            glm::vec3(0.0f),
-                            0,
-                            0.0f,
-                            0.0f
-                        });
-                    }
-                    attack_move_armed = false;
+                    execute_command_button(CommandButtonId::hold_position);
                 } else if (event.key.keysym.sym == SDLK_b) {
-                    // build hotkeys just preload the build mode payload that preview and placement will use
-                    attack_move_armed = false;
-                    build_mode.active = true;
-                    build_mode.archetype_id = kBuildingFarm;
-                    build_mode.color = glm::vec3(0.76f, 0.66f, 0.28f);
-                    build_mode.height = 0.78f;
-                    build_mode.label = "Farm";
+                    execute_command_button(CommandButtonId::build_farm);
                 } else if (event.key.keysym.sym == SDLK_n) {
-                    attack_move_armed = false;
-                    build_mode.active = true;
-                    build_mode.archetype_id = kBuildingDepot;
-                    build_mode.color = glm::vec3(0.52f, 0.41f, 0.28f);
-                    build_mode.height = 1.08f;
-                    build_mode.label = "Depot";
+                    execute_command_button(CommandButtonId::build_depot);
+                } else if (event.key.keysym.sym == SDLK_c) {
+                    execute_command_button(CommandButtonId::build_barracks);
+                } else if (event.key.keysym.sym == SDLK_t) {
+                    execute_command_button(CommandButtonId::build_tower);
                 } else if (event.key.keysym.sym == SDLK_r) {
                     // quick cancel for building placement mode
-                    attack_move_armed = false;
-                    build_mode.active = false;
-                    build_mode.has_preview = false;
-                } else if (event.key.keysym.sym == SDLK_q && hovered_building.has_value()) {
-                    // production shortcuts operate on the currently hovered building to avoid a separate command card ui
-                    world.enqueueProduction(hovered_building.value(), kUnitArchetypeWorker);
-                } else if (event.key.keysym.sym == SDLK_e && hovered_building.has_value()) {
-                    world.enqueueProduction(hovered_building.value(), kUnitArchetypePlayer);
-                } else if (event.key.keysym.sym == SDLK_x && hovered_building.has_value()) {
-                    world.removeBuilding(hovered_building.value());
-                    hovered_building.reset();
+                    clear_tactical_modes(command_ui, attack_move_armed);
+                    cancel_build_mode(build_mode);
+                } else if (event.key.keysym.sym == SDLK_q) {
+                    execute_command_button(CommandButtonId::queue_worker);
+                } else if (event.key.keysym.sym == SDLK_e) {
+                    execute_command_button(CommandButtonId::queue_infantry);
+                } else if (event.key.keysym.sym == SDLK_z) {
+                    execute_command_button(CommandButtonId::queue_scout);
+                } else if (event.key.keysym.sym == SDLK_v) {
+                    execute_command_button(CommandButtonId::queue_heavy);
+                } else if (event.key.keysym.sym == SDLK_i) {
+                    execute_command_button(CommandButtonId::select_idle_worker);
+                } else if (event.key.keysym.sym == SDLK_m) {
+                    execute_command_button(CommandButtonId::select_army);
+                } else if (event.key.keysym.sym == SDLK_BACKSPACE) {
+                    if ((SDL_GetModState() & KMOD_SHIFT) != 0) {
+                        execute_command_button(CommandButtonId::clear_queue);
+                    } else {
+                        execute_command_button(CommandButtonId::cancel_queue);
+                    }
+                } else if (event.key.keysym.sym == SDLK_x) {
+                    execute_command_button(CommandButtonId::demolish);
                 }
                 break;
             default:
@@ -2807,11 +5486,22 @@ int main() {
         }
 
         update_camera_from_keyboard(camera, dt_seconds);
+        if (kScenarioVariantDemo) {
+            director.elapsed_seconds += dt_seconds;
+        } else {
+            update_demo_director(world, director, alert, dt_seconds);
+        }
         // the world advances once all player input for the frame has been consumed
         world.update(dt_seconds);
         update_hud_pulses(hud_pulses, world.events(), dt_seconds);
+        update_demo_event_feed(director, world.events());
+        update_alert(alert, dt_seconds);
         unit_snapshots = world.unitSnapshots();
         snapshot_map = snapshot_map_from_vector(unit_snapshots);
+        if (command_ui.selected_building_id.has_value() &&
+            !world.getBuildingSnapshot(command_ui.selected_building_id.value()).has_value()) {
+            clear_building_selection(command_ui);
+        }
         // refresh all client side caches after simulation so rendering and selection use current state
         update_unit_visuals(unit_snapshots, unit_visuals, dt_seconds);
         sync_units_to_scene_graph(scene_graph, unit_snapshots, unit_visuals);
@@ -2822,10 +5512,24 @@ int main() {
             SDL_GetMouseState(&mouse_x, &mouse_y);
             hovered_building =
                 hovered_building_id(window, camera, world.terrain(), world.buildings(), mouse_x, mouse_y);
+            if (hovered_building.has_value()) {
+                const auto hovered_snapshot = world.getBuildingSnapshot(hovered_building.value());
+                if (hovered_snapshot.has_value() &&
+                    hovered_snapshot->team != 0 &&
+                    !world.isBuildingVisibleToTeam(0, hovered_snapshot->building_id)) {
+                    hovered_building.reset();
+                }
+            }
         } else {
             hovered_building.reset();
         }
-        update_window_title(window, unit_snapshots, unit_visuals, build_mode, attack_move_armed, world);
+        update_window_title(window,
+                            unit_snapshots,
+                            unit_visuals,
+                            build_mode,
+                            attack_move_armed,
+                            command_ui,
+                            world);
         render_scene(draw_state,
                      *cube_shape,
                      *plane_shape,
@@ -2837,7 +5541,8 @@ int main() {
                      unit_visuals,
                      building_styles,
                      build_mode,
-                     hovered_building);
+                     hovered_building,
+                     command_ui.selected_building_id);
         draw_selection_overlay(window, selection);
         draw_hud_overlay(window,
                          world,
@@ -2847,7 +5552,11 @@ int main() {
                          unit_snapshots,
                          unit_visuals,
                          hovered_building,
-                         hud_pulses);
+                         command_ui,
+                         hud_pulses,
+                         alert,
+                         director,
+                         tutorial_open);
         sdl.updateWindows();
 
         // small sleep avoids spinning unnecessarily hard when frame pacing varies

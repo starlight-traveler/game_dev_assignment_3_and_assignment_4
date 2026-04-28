@@ -415,6 +415,7 @@ private:
         float attack_cooldown;
         float attack_cooldown_remaining;
         float projectile_speed;
+        RtsCombatRole combat_role;
         float harvest_cooldown;
         float harvest_cooldown_remaining;
         // short visual feedback timer after taking damage
@@ -473,11 +474,22 @@ private:
     bool assignPath(UnitState& unit,
                     const glm::vec3& target_position,
                     float arrival_radius);
+    glm::vec3 resolveOrderTarget(const UnitState& unit,
+                                 const RtsOrder& order,
+                                 const glm::vec3& base_target) const;
+    glm::vec3 findNearbyOccupancyTarget(const UnitState& unit,
+                                        const glm::vec3& desired_target,
+                                        float search_radius) const;
+    glm::vec2 computeCrowdSteeringDirection(const UnitState& unit,
+                                            const glm::vec2& preferred_direction) const;
+    bool canOccupyPosition(const UnitState& unit, const glm::vec3& position) const;
+    void applyCrowdSeparation();
     bool moveUnitToward(UnitState& unit,
                         const glm::vec3& target_position,
                         float move_speed,
                         float arrival_radius,
-                        float delta_seconds);
+                        float delta_seconds,
+                        bool smooth_arrival = false);
     bool tryAttackUnit(UnitState& attacker, const UnitState& target);
     bool tryAttackBuilding(UnitState& attacker, const OwnedBuildingState& target);
     std::optional<std::uint32_t> findNearestEnemyUnit(int team,

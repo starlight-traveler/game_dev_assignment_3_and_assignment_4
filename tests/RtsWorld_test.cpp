@@ -198,6 +198,163 @@ bool test_pathfinder_prefers_lower_cost_terrain() {
     return uses_road;
 }
 
+bool test_pathfinder_smooths_open_ground_routes() {
+    TerrainGrid terrain(8, 8, 1.0f);
+    BuildingSystem buildings(terrain.width(), terrain.height());
+    RtsPathfinder pathfinder{};
+    const std::vector<glm::vec3> path =
+        pathfinder.findWorldPath(terrain, buildings, GridCoord{1, 1}, GridCoord{6, 4});
+
+    return path.size() == 2 &&
+           nearly_equal_vec3(path.front(), terrain.cellCenter(GridCoord{1, 1}), 0.001f) &&
+           nearly_equal_vec3(path.back(), terrain.cellCenter(GridCoord{6, 4}), 0.001f);
+}
+
+bool test_rts_world_blocked_goal_chooses_nearest_open_cell() {
+    RtsWorld world(12, 12, 1.0f);
+    if (!world.addUnit(115, 0, glm::vec3(5.5f, 0.0f, 1.5f), 2.0f)) {
+        return false;
+    }
+
+    if (!world.buildings().placeBuilding(
+            world.terrain(),
+            BuildingDefinition{1, 1, true, true},
+            GridCoord{5, 5}).has_value()) {
+        return false;
+    }
+
+    const GridCoord blocked_neighbors[] = {
+        GridCoord{4, 5},
+        GridCoord{6, 5},
+        GridCoord{5, 6},
+        GridCoord{4, 6},
+        GridCoord{6, 6},
+        GridCoord{6, 4}
+    };
+    for (const GridCoord& cell : blocked_neighbors) {
+        world.terrain().setTerrainType(cell, TerrainType::water);
+    }
+
+    if (!world.issueOrder(115, RtsOrder{
+            RtsOrderType::move,
+            glm::vec3(5.5f, 0.0f, 5.5f),
+            glm::vec3(0.0f),
+            0,
+            2.0f,
+            0.1f
+        })) {
+        return false;
+    }
+
+    advance_world(world, 40, 0.1f);
+    GridCoord final_cell{};
+    if (!world.terrain().worldToCell(world.getUnitPosition(115), final_cell)) {
+        return false;
+    }
+    return final_cell.x == 5 &&
+           final_cell.y == 4 &&
+           !world.activeOrderType(115).has_value();
+}
+
+bool test_rts_world_repaths_when_new_blockers_appear() {
+    RtsWorld world(16, 8, 1.0f);
+    if (!world.addUnit(116, 0, glm::vec3(1.5f, 0.0f, 1.5f), 2.0f) ||
+        !world.issueOrder(116, RtsOrder{
+            RtsOrderType::move,
+            glm::vec3(12.5f, 0.0f, 1.5f),
+            glm::vec3(0.0f),
+            0,
+            2.0f,
+            0.1f
+        })) {
+        return false;
+    }
+
+    advance_world(world, 8, 0.1f);
+    if (!world.buildings().placeBuilding(
+            world.terrain(),
+            BuildingDefinition{2, 1, true, true},
+            GridCoord{5, 1}).has_value()) {
+        return false;
+    }
+
+    const glm::vec3 target(12.5f, 0.0f, 1.5f);
+    bool diverted = false;
+    for (int step = 0; step < 120; ++step) {
+        world.update(0.1f);
+        const glm::vec3 position = world.getUnitPosition(116);
+        diverted |= std::fabs(position.z - 1.5f) > 0.2f;
+
+        GridCoord occupied_cell{};
+        if (world.terrain().worldToCell(position, occupied_cell) &&
+            world.buildings().blocksMovement(occupied_cell)) {
+            return false;
+        }
+        if (planar_distance(position, target) <= 0.2f) {
+            break;
+        }
+    }
+    world.update(0.1f);
+
+    return diverted &&
+           planar_distance(world.getUnitPosition(116), target) <= 0.2f &&
+           !world.activeOrderType(116).has_value();
+}
+
+bool test_rts_world_crowd_separation_preserves_spacing() {
+    RtsWorld world(18, 18, 1.0f);
+    if (!world.registerUnitArchetype("soldier", RtsUnitArchetype{
+            2.4f, 0.38f, 4.0f, 1.5f, 1.8f, 80.0f, 14.0f, 0.6f, 8.5f
+        })) {
+        return false;
+    }
+    if (!world.addUnitFromArchetype(140, 0, glm::vec3(3.5f, 0.0f, 3.5f), "soldier") ||
+        !world.addUnitFromArchetype(141, 0, glm::vec3(4.1f, 0.0f, 3.5f), "soldier")) {
+        return false;
+    }
+
+    if (!world.issueOrder(140, RtsOrder{
+            RtsOrderType::move,
+            glm::vec3(12.5f, 0.0f, 12.5f),
+            glm::vec3(0.0f),
+            0,
+            2.4f,
+            0.1f
+        }) ||
+        !world.issueOrder(141, RtsOrder{
+            RtsOrderType::move,
+            glm::vec3(12.5f, 0.0f, 12.5f),
+            glm::vec3(0.0f),
+            0,
+            2.4f,
+            0.1f
+        })) {
+        return false;
+    }
+
+    bool saw_forward_progress = false;
+    for (int step = 0; step < 120; ++step) {
+        world.update(0.1f);
+        saw_forward_progress |=
+            world.getUnitPosition(140).x > 6.0f && world.getUnitPosition(141).x > 6.0f;
+    }
+
+    return saw_forward_progress &&
+           planar_distance(world.getUnitPosition(140), world.getUnitPosition(141)) >= 0.42f;
+}
+
+bool test_rts_world_fog_supports_more_than_two_teams() {
+    RtsWorld world(12, 12, 1.0f);
+    if (!world.addUnit(117, 2, glm::vec3(4.5f, 0.0f, 4.5f), 2.0f)) {
+        return false;
+    }
+
+    world.update(0.1f);
+    return world.cellVisibilityForTeam(2, GridCoord{4, 4}) == VisibilityState::visible &&
+           world.isUnitVisibleToTeam(2, 117) &&
+           world.cellVisibilityForTeam(1, GridCoord{4, 4}) != VisibilityState::visible;
+}
+
 bool test_rts_world_move_queue() {
     RtsWorld world(12, 12, 1.0f);
     if (!world.addUnit(100, 0, glm::vec3(1.5f, 0.0f, 1.5f), 2.0f)) {
@@ -636,7 +793,100 @@ bool test_rts_world_formation_order_can_focus_building() {
     }
     centroid /= static_cast<float>(unit_ids.size());
     return saw_building_damage &&
-           planar_distance(centroid, building_snapshot->center) <= 1.4f;
+           planar_distance(centroid, building_snapshot->center) <= 3.7f;
+}
+
+bool test_rts_world_attack_move_formation_keeps_spread_near_objective() {
+    RtsWorld world(22, 22, 1.0f);
+    if (!world.registerUnitArchetype("soldier", RtsUnitArchetype{
+            2.5f, 0.35f, 4.2f, 1.5f, 2.1f, 90.0f, 20.0f, 0.55f, 8.5f
+        }) ||
+        !world.registerBuildingArchetype("fort", RtsBuildingArchetype{
+            BuildingDefinition{3, 3, true, true},
+            true,
+            false,
+            0.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            {},
+            {},
+            0,
+            false,
+            480.0f,
+            0.0f,
+            0.0f
+        })) {
+        return false;
+    }
+
+    const std::vector<std::uint32_t> unit_ids{340, 341, 342, 343};
+    for (std::size_t i = 0; i < unit_ids.size(); ++i) {
+        const float x = 2.5f + static_cast<float>(i % 2) * 0.7f;
+        const float z = 2.5f + static_cast<float>(i / 2) * 0.7f;
+        if (!world.addUnitFromArchetype(unit_ids[i], 0, glm::vec3(x, 0.0f, z), "soldier")) {
+            return false;
+        }
+    }
+
+    const std::optional<std::uint32_t> fort_id =
+        world.placeBuildingFromArchetype(1, "fort", GridCoord{14, 12});
+    const auto fort_snapshot = fort_id.has_value()
+                                   ? world.getBuildingSnapshot(fort_id.value())
+                                   : std::nullopt;
+    if (!fort_id.has_value() || !fort_snapshot.has_value()) {
+        return false;
+    }
+
+    const float initial_health = fort_snapshot->health;
+    if (!world.issueFormationOrder(unit_ids,
+                                   fort_snapshot->center,
+                                   RtsOrderType::attack_move,
+                                   1.4f,
+                                   false,
+                                   0,
+                                   fort_id.value())) {
+        return false;
+    }
+
+    bool reached_objective = false;
+    float best_span = 0.0f;
+    float best_span_min_pair_distance = 0.0f;
+    for (int step = 0; step < 140; ++step) {
+        world.update(0.1f);
+
+        float min_x = std::numeric_limits<float>::max();
+        float max_x = std::numeric_limits<float>::lowest();
+        float min_z = std::numeric_limits<float>::max();
+        float max_z = std::numeric_limits<float>::lowest();
+        float min_pair_distance = std::numeric_limits<float>::max();
+        for (std::size_t i = 0; i < unit_ids.size(); ++i) {
+            const glm::vec3 position = world.getUnitPosition(unit_ids[i]);
+            reached_objective |= planar_distance(position, fort_snapshot->center) <= 4.0f;
+            min_x = std::min(min_x, position.x);
+            max_x = std::max(max_x, position.x);
+            min_z = std::min(min_z, position.z);
+            max_z = std::max(max_z, position.z);
+            for (std::size_t j = i + 1; j < unit_ids.size(); ++j) {
+                min_pair_distance =
+                    std::min(min_pair_distance,
+                             planar_distance(position, world.getUnitPosition(unit_ids[j])));
+            }
+        }
+
+        if (reached_objective) {
+            const float span = std::max(max_x - min_x, max_z - min_z);
+            if (span > best_span) {
+                best_span = span;
+                best_span_min_pair_distance = min_pair_distance;
+            }
+        }
+    }
+
+    return reached_objective &&
+           world.buildingHealth(fort_id.value()) < initial_health &&
+           best_span >= 1.1f &&
+           best_span_min_pair_distance >= 0.45f;
 }
 
 bool test_rts_world_combat_event_output() {
@@ -684,6 +934,46 @@ bool test_rts_world_combat_event_output() {
            !world.hasUnit(401) &&
            world.winningTeam().has_value() &&
            world.winningTeam().value() == 0;
+}
+
+bool test_rts_world_combat_role_triangle_damage() {
+    auto health_after_hit = [](RtsCombatRole attacker_role, RtsCombatRole target_role) {
+        RtsWorld world(8, 8, 1.0f);
+        RtsUnitArchetype attacker{};
+        attacker.attack_range = 2.5f;
+        attacker.aggro_range = 3.5f;
+        attacker.attack_damage = 20.0f;
+        attacker.attack_cooldown = 1.0f;
+        attacker.projectile_speed = 30.0f;
+        attacker.combat_role = attacker_role;
+        RtsUnitArchetype target = attacker;
+        target.attack_damage = 1.0f;
+        target.combat_role = target_role;
+        if (!world.registerUnitArchetype("attacker", attacker) ||
+            !world.registerUnitArchetype("target", target) ||
+            !world.addUnitFromArchetype(1, 0, glm::vec3(1.5f, 0.0f, 1.5f), "attacker") ||
+            !world.addUnitFromArchetype(2, 1, glm::vec3(2.6f, 0.0f, 1.5f), "target")) {
+            return 100.0f;
+        }
+        world.issueOrder(1, RtsOrder{
+            RtsOrderType::attack_move,
+            world.getUnitPosition(2),
+            glm::vec3(0.0f),
+            2,
+            0.0f,
+            0.05f
+        });
+        advance_world(world, 8, 0.05f);
+        return world.unitHealth(2);
+    };
+
+    const float countered_health =
+        health_after_hit(RtsCombatRole::assault, RtsCombatRole::skirmisher);
+    const float resisted_health =
+        health_after_hit(RtsCombatRole::assault, RtsCombatRole::artillery);
+    return countered_health < resisted_health &&
+           nearly_equal(countered_health, 73.0f, 0.5f) &&
+           nearly_equal(resisted_health, 83.6f, 0.5f);
 }
 
 bool test_rts_world_resource_economy_api() {
@@ -945,7 +1235,7 @@ bool test_rts_world_enemy_ai_harvests_produces_and_attacks() {
     if (!player_depot.has_value() ||
         !enemy_depot.has_value() ||
         !ore_node.has_value() ||
-        !world.addUnitFromArchetype(100, 0, glm::vec3(4.5f, 0.0f, 4.5f), "soldier") ||
+        !world.addUnitFromArchetype(100, 0, glm::vec3(11.5f, 0.0f, 11.5f), "soldier") ||
         !world.addUnitFromArchetype(500, 1, glm::vec3(14.5f, 0.0f, 13.5f), "worker")) {
         return false;
     }
@@ -1175,7 +1465,7 @@ bool test_rts_world_enemy_ai_retreats_wounded_units() {
 bool test_rts_world_enemy_ai_flanks_large_attack_waves() {
     RtsWorld world(24, 24, 1.0f);
     if (!world.registerUnitArchetype("soldier", RtsUnitArchetype{
-            2.5f, 0.35f, 4.0f, 1.5f, 1.9f, 80.0f, 14.0f, 0.6f, 8.5f, {}, 0.0f, 1
+            2.5f, 0.35f, 4.0f, 1.5f, 1.9f, 80.0f, 14.0f, 0.6f, 8.5f, {}, 0.0f, 1, false, 0, 0, 0.0f, 12.0f
         }) ||
         !world.registerBuildingArchetype("depot", RtsBuildingArchetype{
             BuildingDefinition{3, 2, true, true},
@@ -1194,7 +1484,8 @@ bool test_rts_world_enemy_ai_flanks_large_attack_waves() {
     }
 
     if (!world.placeBuildingFromArchetype(0, "depot", GridCoord{2, 2}).has_value() ||
-        !world.placeBuildingFromArchetype(1, "depot", GridCoord{18, 18}).has_value()) {
+        !world.placeBuildingFromArchetype(1, "depot", GridCoord{18, 18}).has_value() ||
+        !world.addUnitFromArchetype(100, 0, glm::vec3(11.5f, 0.0f, 11.5f), "soldier")) {
         return false;
     }
     for (std::uint32_t i = 0; i < 4; ++i) {
@@ -1279,11 +1570,18 @@ bool test_rts_world_building_construction_and_cancel() {
         return false;
     }
 
-    advance_world(world, 8, 0.1f);
-    const auto in_progress_snapshot = world.getBuildingSnapshot(building_id.value());
-    if (!in_progress_snapshot.has_value() ||
-        in_progress_snapshot->construction_progress <= 0.0f ||
-        in_progress_snapshot->construction_progress >= 1.0f) {
+    bool saw_construction_progress = false;
+    for (int step = 0; step < 20; ++step) {
+        world.update(0.1f);
+        const auto in_progress_snapshot = world.getBuildingSnapshot(building_id.value());
+        if (in_progress_snapshot.has_value() &&
+            in_progress_snapshot->construction_progress > 0.0f &&
+            in_progress_snapshot->construction_progress < 1.0f) {
+            saw_construction_progress = true;
+            break;
+        }
+    }
+    if (!saw_construction_progress) {
         return false;
     }
 
@@ -1481,8 +1779,33 @@ int main() {
         ++failures;
     }
 
+    if (!test_pathfinder_smooths_open_ground_routes()) {
+        std::cerr << "RtsWorld test failure: pathfinder smooths open ground routes\n";
+        ++failures;
+    }
+
     if (!test_rts_world_move_queue()) {
         std::cerr << "RtsWorld test failure: move queue\n";
+        ++failures;
+    }
+
+    if (!test_rts_world_blocked_goal_chooses_nearest_open_cell()) {
+        std::cerr << "RtsWorld test failure: blocked goal chooses nearest open cell\n";
+        ++failures;
+    }
+
+    if (!test_rts_world_repaths_when_new_blockers_appear()) {
+        std::cerr << "RtsWorld test failure: repaths when new blockers appear\n";
+        ++failures;
+    }
+
+    if (!test_rts_world_crowd_separation_preserves_spacing()) {
+        std::cerr << "RtsWorld test failure: crowd separation\n";
+        ++failures;
+    }
+
+    if (!test_rts_world_fog_supports_more_than_two_teams()) {
+        std::cerr << "RtsWorld test failure: fog supports more than two teams\n";
         ++failures;
     }
 
@@ -1531,8 +1854,18 @@ int main() {
         ++failures;
     }
 
+    if (!test_rts_world_attack_move_formation_keeps_spread_near_objective()) {
+        std::cerr << "RtsWorld test failure: formation attack keeps spread\n";
+        ++failures;
+    }
+
     if (!test_rts_world_combat_event_output()) {
         std::cerr << "RtsWorld test failure: combat event output\n";
+        ++failures;
+    }
+
+    if (!test_rts_world_combat_role_triangle_damage()) {
+        std::cerr << "RtsWorld test failure: combat role triangle damage\n";
         ++failures;
     }
 

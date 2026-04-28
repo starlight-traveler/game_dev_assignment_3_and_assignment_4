@@ -22,6 +22,9 @@
       };
     </script>
     <script defer src="{{ '/assets/js/tex-svg.js' | relative_url }}"></script>
+    {% if page.presentation_deck %}
+    <script defer src="{{ '/assets/js/presentation.js' | relative_url }}"></script>
+    {% endif %}
   </head>
   <body>
     <div class="site-shell">
@@ -37,6 +40,7 @@
           <a href="{{ '/objective-d-guide' | relative_url }}">Objective D</a>
           <a href="{{ '/objective-e-guide' | relative_url }}">Objective E</a>
           <a href="{{ '/assignment-4-guide' | relative_url }}">Assignment 4</a>
+          <a href="{{ '/presentation' | relative_url }}">Presentation</a>
           <a href="{{ '/mathematics' | relative_url }}">Mathematics</a>
           <a href="{{ '/architecture' | relative_url }}">Architecture</a>
           <a href="{{ '/runtime-flow' | relative_url }}">Runtime Flow</a>

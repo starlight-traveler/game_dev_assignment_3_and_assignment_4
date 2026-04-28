@@ -171,6 +171,117 @@ th {
   border-color: #9ac8df;
 }
 
+.presentation-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 1rem -4px 1.5rem;
+  padding: 8px 4px;
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom: 1px solid #deebf5;
+}
+
+.presentation-tabs a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  text-decoration: none;
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 10px;
+  background: #fff;
+}
+
+.presentation-tabs a:hover {
+  color: #fff;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.presentation-tabs a.is-active {
+  color: #fff;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.presentation-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 1.25rem;
+  padding: 10px;
+  border: 1px solid #dbe8f2;
+  border-radius: 10px;
+  background: #f7fbff;
+}
+
+.presentation-controls button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 10px;
+  color: var(--ink);
+  background: #fff;
+  cursor: pointer;
+}
+
+.presentation-controls button:hover:not(:disabled) {
+  color: #fff;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.presentation-controls button:disabled {
+  cursor: not-allowed;
+  color: #7890a2;
+  background: #eef5fa;
+}
+
+.presentation-controls span {
+  color: var(--ink-soft);
+  font-size: 0.94rem;
+}
+
+.presentation-slide {
+  min-height: 540px;
+  padding: 4px 2px 18px;
+}
+
+.presentation-slide.is-active {
+  animation: slide-in 160ms ease-out;
+}
+
+.speaker-notes {
+  margin-top: 1rem;
+  border: 1px solid #dce9f2;
+  border-radius: 10px;
+  padding: 0.7rem 0.85rem;
+  background: #f8fbfe;
+}
+
+.speaker-notes summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .muted {
   color: #4f6d83;
 }
@@ -185,5 +296,9 @@ th {
 @media (max-width: 740px) {
   .content-card {
     padding: 16px;
+  }
+
+  .presentation-slide {
+    min-height: 420px;
   }
 }

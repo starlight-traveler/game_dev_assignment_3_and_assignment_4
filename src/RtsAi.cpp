@@ -15,11 +15,41 @@ bool contains_worker_token(const std::string& archetype_id) {
     return archetype_id.find("worker") != std::string::npos ||
            archetype_id.find("harvest") != std::string::npos;
 }
+
+bool unit_visible_to_team(const RtsAiFrame& frame,
+                          int team,
+                          const RtsWorldUnitSnapshot& unit) {
+    if (unit.team == team || !frame.unit_visibility_for_team) {
+        return true;
+    }
+    return frame.unit_visibility_for_team(team, unit);
+}
+
+bool building_visible_to_team(const RtsAiFrame& frame,
+                              int team,
+                              const RtsWorldBuildingSnapshot& building) {
+    if (building.team == team || !frame.building_visibility_for_team) {
+        return true;
+    }
+    return frame.building_visibility_for_team(team, building);
+}
+
+bool resource_visible_to_team(const RtsAiFrame& frame,
+                              int team,
+                              const RtsWorldResourceNodeSnapshot& node) {
+    if (!frame.resource_visibility_for_team) {
+        return true;
+    }
+    return frame.resource_visibility_for_team(team, node);
+}
 }
 
 void RtsAiSystem::setTeamProfile(int team, const RtsAiProfile& profile) {
     // resetting state here keeps ai memory consistent with the new profile
-    teams_[team] = TeamState{profile, 0.0f, 0.0f, 0U, 1.0f, false, glm::vec3(0.0f)};
+    TeamState state{};
+    state.profile = profile;
+    state.preferred_flank_sign = 1.0f;
+    teams_[team] = std::move(state);
 }
 
 bool RtsAiSystem::removeTeamProfile(int team) {
@@ -50,11 +80,58 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
             std::max(0.0f, state.think_cooldown_remaining - delta_seconds);
         state.attack_wave_cooldown_remaining =
             std::max(0.0f, state.attack_wave_cooldown_remaining - delta_seconds);
+        state.scout_target_cooldown_remaining =
+            std::max(0.0f, state.scout_target_cooldown_remaining - delta_seconds);
+        for (TeamState::RecentGroupCommand& recent : state.recent_group_commands) {
+            recent.cooldown_remaining =
+                std::max(0.0f, recent.cooldown_remaining - delta_seconds);
+        }
+        state.recent_group_commands.erase(
+            std::remove_if(
+                state.recent_group_commands.begin(),
+                state.recent_group_commands.end(),
+                [](const TeamState::RecentGroupCommand& recent) {
+                    return recent.cooldown_remaining <= 0.0f;
+                }),
+            state.recent_group_commands.end());
         if (state.think_cooldown_remaining > 0.0f) {
             continue;
         }
 
         state.think_cooldown_remaining = std::max(state.profile.think_interval, 0.05f);
+        auto same_group_command =
+            [](const TeamState::RecentGroupCommand& recent,
+               const RtsAiCommand& command) {
+                if (recent.type != command.type ||
+                    recent.target_unit_id != command.target_unit_id ||
+                    planar_distance(recent.target_position, command.target_position) > 0.35f) {
+                    return false;
+                }
+                std::vector<std::uint32_t> command_units = command.unit_ids;
+                std::sort(command_units.begin(), command_units.end());
+                return recent.unit_ids == command_units;
+            };
+        auto push_command = [&](const RtsAiCommand& command) {
+            if ((command.type == RtsAiCommandType::issue_move ||
+                 command.type == RtsAiCommandType::issue_attack_move) &&
+                !command.unit_ids.empty()) {
+                for (const TeamState::RecentGroupCommand& recent : state.recent_group_commands) {
+                    if (same_group_command(recent, command)) {
+                        return;
+                    }
+                }
+                TeamState::RecentGroupCommand recent{};
+                recent.type = command.type;
+                recent.unit_ids = command.unit_ids;
+                std::sort(recent.unit_ids.begin(), recent.unit_ids.end());
+                recent.target_unit_id = command.target_unit_id;
+                recent.target_position = command.target_position;
+                recent.cooldown_remaining =
+                    std::max(state.profile.think_interval * 1.6f, 0.45f);
+                state.recent_group_commands.push_back(std::move(recent));
+            }
+            commands.push_back(command);
+        };
         // anchor acts like a rough base center for defense rallying and staging
         const glm::vec3 anchor = teamAnchor(team, frame);
         const RtsWorldUnitSnapshot* visible_enemy_unit =
@@ -83,12 +160,12 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
                 if (worker_it == frame.units.end()) {
                     continue;
                 }
-                const std::uint32_t node_id = nearestResourceNode(worker_it->position, frame);
+                const std::uint32_t node_id = nearestResourceNode(team, worker_it->position, frame);
                 if (node_id == 0) {
                     break;
                 }
                 // one harvest command is emitted per idle worker
-                commands.push_back(RtsAiCommand{
+                push_command(RtsAiCommand{
                     RtsAiCommandType::issue_harvest,
                     team,
                     worker_id,
@@ -112,6 +189,8 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
                     } else {
                         ++combat_count;
                     }
+                } else if (!unit_visible_to_team(frame, team, unit)) {
+                    continue;
                 } else if (isWorkerArchetypeId(unit.archetype_id)) {
                     ++enemy_worker_count;
                 } else {
@@ -162,7 +241,7 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
                     if (candidate.empty()) {
                         continue;
                     }
-                    commands.push_back(RtsAiCommand{
+                    push_command(RtsAiCommand{
                         RtsAiCommandType::enqueue_production,
                         team,
                         0,
@@ -194,7 +273,7 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
                 lowHealthRetreatUnits(team, frame, state.profile.worker_archetype_id);
             if (!retreating_units.empty()) {
                 // individually weak front line units get ordered back toward the anchor
-                commands.push_back(RtsAiCommand{
+                push_command(RtsAiCommand{
                     RtsAiCommandType::issue_move,
                     team,
                     0,
@@ -226,8 +305,10 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
                 enemy_strength > ally_strength * 1.35f && enemy_strength >= 1.6f;
             const int enemy_combat_count = static_cast<int>(std::count_if(
                 frame.units.begin(), frame.units.end(),
-                [team](const RtsWorldUnitSnapshot& unit) {
-                    return unit.team != team && !contains_worker_token(unit.archetype_id);
+                [&frame, team](const RtsWorldUnitSnapshot& unit) {
+                    return unit.team != team &&
+                           unit_visible_to_team(frame, team, unit) &&
+                           !contains_worker_token(unit.archetype_id);
                 }));
             const int dynamic_attack_force =
                 std::max(state.profile.attack_force_size, 1 + enemy_combat_count / 2);
@@ -235,7 +316,7 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
             // that way the ai waits for a more reasonable force before committing across the map
 
             if (should_retreat) {
-                commands.push_back(RtsAiCommand{
+                push_command(RtsAiCommand{
                     RtsAiCommandType::issue_move,
                     team,
                     0,
@@ -250,7 +331,7 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
 
             if (defending_target) {
                 // if enemies are near the base use all available combat units to defend immediately
-                commands.push_back(RtsAiCommand{
+                push_command(RtsAiCommand{
                     RtsAiCommandType::issue_attack_move,
                     team,
                     0,
@@ -280,7 +361,7 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
                 if (!available_combat_units.empty()) {
                     // without a full attack force the ai probes with a scout or moves toward a scouting point
                     const std::optional<glm::vec3> scout_point = scoutingPoint(team, state, anchor, frame);
-                    commands.push_back(RtsAiCommand{
+                    push_command(RtsAiCommand{
                         RtsAiCommandType::issue_move,
                         team,
                         available_combat_units.front(),
@@ -297,7 +378,7 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
             if (state.attack_wave_cooldown_remaining > 0.0f) {
                 // while wave cooldown is active gather nearer to the midpoint rather than full commit
                 // this creates a rally phase so the group compresses before the next push
-                commands.push_back(RtsAiCommand{
+                push_command(RtsAiCommand{
                     RtsAiCommandType::issue_move,
                     team,
                     0,
@@ -326,7 +407,7 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
                     }
                 }
                 if (!left_group.empty()) {
-                    commands.push_back(RtsAiCommand{
+                    push_command(RtsAiCommand{
                         RtsAiCommandType::issue_move,
                         team,
                         0,
@@ -338,7 +419,7 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
                     });
                 }
                 if (!right_group.empty()) {
-                    commands.push_back(RtsAiCommand{
+                    push_command(RtsAiCommand{
                         RtsAiCommandType::issue_move,
                         team,
                         0,
@@ -356,7 +437,7 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
             if (static_cast<int>(available_combat_units.size()) < dynamic_attack_force &&
                 available_combat_units.size() >= 2) {
                 // partially assembled armies still rally forward instead of idling at the base
-                commands.push_back(RtsAiCommand{
+                push_command(RtsAiCommand{
                     RtsAiCommandType::issue_move,
                     team,
                     0,
@@ -369,7 +450,7 @@ std::vector<RtsAiCommand> RtsAiSystem::update(float delta_seconds, const RtsAiFr
                 continue;
             }
             // otherwise launch or continue the actual attack move toward the best objective
-            commands.push_back(RtsAiCommand{
+            push_command(RtsAiCommand{
                 RtsAiCommandType::issue_attack_move,
                 team,
                 0,
@@ -530,6 +611,9 @@ float RtsAiSystem::nearbyStrength(int team,
         if (enemies_only ? (unit.team == team) : (unit.team != team)) {
             continue;
         }
+        if (unit.team != team && !unit_visible_to_team(frame, team, unit)) {
+            continue;
+        }
         if (planar_distance(origin, unit.position) > radius) {
             continue;
         }
@@ -563,10 +647,15 @@ std::vector<std::uint32_t> RtsAiSystem::lowHealthRetreatUnits(
     return unit_ids;
 }
 
-std::uint32_t RtsAiSystem::nearestResourceNode(const glm::vec3& origin, const RtsAiFrame& frame) const {
+std::uint32_t RtsAiSystem::nearestResourceNode(int team,
+                                               const glm::vec3& origin,
+                                               const RtsAiFrame& frame) const {
     std::uint32_t nearest_id = 0;
     float nearest_distance = std::numeric_limits<float>::max();
     for (const RtsWorldResourceNodeSnapshot& node : frame.resource_nodes) {
+        if (!resource_visible_to_team(frame, team, node)) {
+            continue;
+        }
         if (node.remaining_amount <= 0) {
             continue;
         }
@@ -585,6 +674,10 @@ std::optional<glm::vec3> RtsAiSystem::scoutingPoint(int team,
                                                     TeamState& state,
                                                     const glm::vec3& anchor,
                                                     const RtsAiFrame& frame) const {
+    if (state.has_scout_target && state.scout_target_cooldown_remaining > 0.0f) {
+        return state.scout_target;
+    }
+
     std::vector<glm::vec3> candidates{};
     if (state.has_last_seen_enemy_position) {
         // remembered enemy positions get first priority
@@ -594,7 +687,7 @@ std::optional<glm::vec3> RtsAiSystem::scoutingPoint(int team,
     std::vector<const RtsWorldBuildingSnapshot*> enemy_buildings{};
     enemy_buildings.reserve(frame.buildings.size());
     for (const RtsWorldBuildingSnapshot& building : frame.buildings) {
-        if (building.team != team) {
+        if (building.team != team && building_visible_to_team(frame, team, building)) {
             enemy_buildings.push_back(&building);
         }
     }
@@ -614,7 +707,9 @@ std::optional<glm::vec3> RtsAiSystem::scoutingPoint(int team,
     std::vector<const RtsWorldResourceNodeSnapshot*> nodes{};
     nodes.reserve(frame.resource_nodes.size());
     for (const RtsWorldResourceNodeSnapshot& node : frame.resource_nodes) {
-        nodes.push_back(&node);
+        if (resource_visible_to_team(frame, team, node)) {
+            nodes.push_back(&node);
+        }
     }
     std::sort(nodes.begin(), nodes.end(),
               [&anchor](const RtsWorldResourceNodeSnapshot* lhs, const RtsWorldResourceNodeSnapshot* rhs) {
@@ -630,12 +725,45 @@ std::optional<glm::vec3> RtsAiSystem::scoutingPoint(int team,
     }
 
     if (candidates.empty()) {
+        // when nothing is currently known under fog fall back to a simple expanding scouting pattern
+        // this keeps the ai active without giving it omniscient map knowledge
+        const glm::vec2 min_corner = frame.world_min_xz;
+        const glm::vec2 max_corner = frame.world_max_xz;
+        const glm::vec2 center = 0.5f * (min_corner + max_corner);
+        const glm::vec2 north_west(min_corner.x, min_corner.y);
+        const glm::vec2 north_east(max_corner.x, min_corner.y);
+        const glm::vec2 south_west(min_corner.x, max_corner.y);
+        const glm::vec2 south_east(max_corner.x, max_corner.y);
+        const glm::vec2 east(max_corner.x, center.y);
+        const glm::vec2 west(min_corner.x, center.y);
+        const glm::vec2 north(center.x, min_corner.y);
+        const glm::vec2 south(center.x, max_corner.y);
+        const glm::vec2 kFallbackPoints[] = {
+            north_west,
+            north,
+            north_east,
+            east,
+            south_east,
+            south,
+            south_west,
+            west,
+            center
+        };
+        for (const glm::vec2& point : kFallbackPoints) {
+            candidates.push_back(glm::vec3(point.x, 0.0f, point.y));
+        }
+    }
+
+    if (candidates.empty()) {
         return std::nullopt;
     }
     // rotate through the candidate list over time instead of always choosing the first point
     const std::size_t index = state.scout_target_index % candidates.size();
     state.scout_target_index = (state.scout_target_index + 1) % candidates.size();
-    return candidates[index];
+    state.has_scout_target = true;
+    state.scout_target = candidates[index];
+    state.scout_target_cooldown_remaining = 2.4f;
+    return state.scout_target;
 }
 
 const RtsWorldBuildingSnapshot* RtsAiSystem::nearestEnemyBuilding(int team,
@@ -644,7 +772,7 @@ const RtsWorldBuildingSnapshot* RtsAiSystem::nearestEnemyBuilding(int team,
     const RtsWorldBuildingSnapshot* nearest = nullptr;
     float nearest_distance = std::numeric_limits<float>::max();
     for (const RtsWorldBuildingSnapshot& building : frame.buildings) {
-        if (building.team == team) {
+        if (building.team == team || !building_visible_to_team(frame, team, building)) {
             continue;
         }
         const float distance = planar_distance(origin, building.center);
@@ -664,7 +792,7 @@ const RtsWorldBuildingSnapshot* RtsAiSystem::prioritizedEnemyBuilding(
     const RtsWorldBuildingSnapshot* best = nullptr;
     float best_score = std::numeric_limits<float>::lowest();
     for (const RtsWorldBuildingSnapshot& building : frame.buildings) {
-        if (building.team == team) {
+        if (building.team == team || !building_visible_to_team(frame, team, building)) {
             continue;
         }
         // simple heuristic prefers victory critical buildings then towers then proximity
@@ -688,7 +816,9 @@ const RtsWorldUnitSnapshot* RtsAiSystem::nearestEnemyUnit(int team,
     const RtsWorldUnitSnapshot* nearest = nullptr;
     float nearest_distance = radius;
     for (const RtsWorldUnitSnapshot& unit : frame.units) {
-        if (unit.team == team || unit.health <= 0.0f) {
+        if (unit.team == team ||
+            unit.health <= 0.0f ||
+            !unit_visible_to_team(frame, team, unit)) {
             continue;
         }
         const float distance = planar_distance(origin, unit.position);
@@ -708,7 +838,9 @@ const RtsWorldUnitSnapshot* RtsAiSystem::prioritizedEnemyUnit(
     const RtsWorldUnitSnapshot* best = nullptr;
     float best_score = std::numeric_limits<float>::lowest();
     for (const RtsWorldUnitSnapshot& unit : frame.units) {
-        if (unit.team == team || unit.health <= 0.0f) {
+        if (unit.team == team ||
+            unit.health <= 0.0f ||
+            !unit_visible_to_team(frame, team, unit)) {
             continue;
         }
         const float distance = planar_distance(origin, unit.position);

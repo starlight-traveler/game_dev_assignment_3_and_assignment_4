@@ -123,6 +123,91 @@ add_executable(rts_demo
     src/TerrainGrid.cpp
 )
 
+add_executable(rts_mass_battle_demo
+    demo/RTSDemo.cpp
+    src/BuildingSystem.cpp
+    src/FogOfWar.cpp
+    src/RtsAi.cpp
+    src/RtsPathfinder.cpp
+    src/RtsCombat.cpp
+    src/RtsEconomy.cpp
+    src/RtsWorld.cpp
+    src/RtsProduction.cpp
+    src/SceneGraph.cpp
+    src/SDL_Manager.cpp
+    src/ShaderProgram.cpp
+    src/Shape.cpp
+    src/TerrainGrid.cpp
+)
+
+add_executable(pathfinding_lab_demo
+    demo/RTSDemo.cpp
+    src/BuildingSystem.cpp
+    src/FogOfWar.cpp
+    src/RtsAi.cpp
+    src/RtsPathfinder.cpp
+    src/RtsCombat.cpp
+    src/RtsEconomy.cpp
+    src/RtsWorld.cpp
+    src/RtsProduction.cpp
+    src/SceneGraph.cpp
+    src/SDL_Manager.cpp
+    src/ShaderProgram.cpp
+    src/Shape.cpp
+    src/TerrainGrid.cpp
+)
+
+add_executable(building_siege_demo
+    demo/RTSDemo.cpp
+    src/BuildingSystem.cpp
+    src/FogOfWar.cpp
+    src/RtsAi.cpp
+    src/RtsPathfinder.cpp
+    src/RtsCombat.cpp
+    src/RtsEconomy.cpp
+    src/RtsWorld.cpp
+    src/RtsProduction.cpp
+    src/SceneGraph.cpp
+    src/SDL_Manager.cpp
+    src/ShaderProgram.cpp
+    src/Shape.cpp
+    src/TerrainGrid.cpp
+)
+
+add_executable(ai_vs_ai_battle_demo
+    demo/RTSDemo.cpp
+    src/BuildingSystem.cpp
+    src/FogOfWar.cpp
+    src/RtsAi.cpp
+    src/RtsPathfinder.cpp
+    src/RtsCombat.cpp
+    src/RtsEconomy.cpp
+    src/RtsWorld.cpp
+    src/RtsProduction.cpp
+    src/SceneGraph.cpp
+    src/SDL_Manager.cpp
+    src/ShaderProgram.cpp
+    src/Shape.cpp
+    src/TerrainGrid.cpp
+)
+
+add_executable(rts_stress_test_demo
+    demo/RTSDemo.cpp
+    src/BuildingSystem.cpp
+    src/FogOfWar.cpp
+    src/RtsAi.cpp
+    src/RtsPathfinder.cpp
+    src/RtsCombat.cpp
+    src/RtsEconomy.cpp
+    src/RtsWorld.cpp
+    src/RtsProduction.cpp
+    src/SceneGraph.cpp
+    src/SDL_Manager.cpp
+    src/ShaderProgram.cpp
+    src/Shape.cpp
+    src/TerrainGrid.cpp
+)
+
 # include dirs for glm
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -133,6 +218,26 @@ target_include_directories(doom_demo PRIVATE
     ${GLM_INCLUDE_DIR}
 )
 target_include_directories(rts_demo PRIVATE
+    src
+    ${GLM_INCLUDE_DIR}
+)
+target_include_directories(rts_mass_battle_demo PRIVATE
+    src
+    ${GLM_INCLUDE_DIR}
+)
+target_include_directories(pathfinding_lab_demo PRIVATE
+    src
+    ${GLM_INCLUDE_DIR}
+)
+target_include_directories(building_siege_demo PRIVATE
+    src
+    ${GLM_INCLUDE_DIR}
+)
+target_include_directories(ai_vs_ai_battle_demo PRIVATE
+    src
+    ${GLM_INCLUDE_DIR}
+)
+target_include_directories(rts_stress_test_demo PRIVATE
     src
     ${GLM_INCLUDE_DIR}
 )
@@ -157,6 +262,36 @@ target_link_libraries(rts_demo PRIVATE
     OpenGL::GL
     quill::quill
 )
+target_link_libraries(rts_mass_battle_demo PRIVATE
+    SDL2::SDL2
+    GLEW::GLEW
+    OpenGL::GL
+    quill::quill
+)
+target_link_libraries(pathfinding_lab_demo PRIVATE
+    SDL2::SDL2
+    GLEW::GLEW
+    OpenGL::GL
+    quill::quill
+)
+target_link_libraries(building_siege_demo PRIVATE
+    SDL2::SDL2
+    GLEW::GLEW
+    OpenGL::GL
+    quill::quill
+)
+target_link_libraries(ai_vs_ai_battle_demo PRIVATE
+    SDL2::SDL2
+    GLEW::GLEW
+    OpenGL::GL
+    quill::quill
+)
+target_link_libraries(rts_stress_test_demo PRIVATE
+    SDL2::SDL2
+    GLEW::GLEW
+    OpenGL::GL
+    quill::quill
+)
 
 # compile defs for quill log level
 target_compile_definitions(${PROJECT_NAME} PRIVATE
@@ -167,6 +302,26 @@ target_compile_definitions(doom_demo PRIVATE
 )
 target_compile_definitions(rts_demo PRIVATE
     QUILL_COMPILE_ACTIVE_LOG_LEVEL=${QUILL_ACTIVE_LOG_LEVEL_DEFINE}
+)
+target_compile_definitions(rts_mass_battle_demo PRIVATE
+    QUILL_COMPILE_ACTIVE_LOG_LEVEL=${QUILL_ACTIVE_LOG_LEVEL_DEFINE}
+    RTS_MASS_BATTLE_DEMO=1
+)
+target_compile_definitions(pathfinding_lab_demo PRIVATE
+    QUILL_COMPILE_ACTIVE_LOG_LEVEL=${QUILL_ACTIVE_LOG_LEVEL_DEFINE}
+    RTS_PATHFINDING_LAB_DEMO=1
+)
+target_compile_definitions(building_siege_demo PRIVATE
+    QUILL_COMPILE_ACTIVE_LOG_LEVEL=${QUILL_ACTIVE_LOG_LEVEL_DEFINE}
+    RTS_BUILDING_SIEGE_DEMO=1
+)
+target_compile_definitions(ai_vs_ai_battle_demo PRIVATE
+    QUILL_COMPILE_ACTIVE_LOG_LEVEL=${QUILL_ACTIVE_LOG_LEVEL_DEFINE}
+    RTS_AI_VS_AI_BATTLE_DEMO=1
+)
+target_compile_definitions(rts_stress_test_demo PRIVATE
+    QUILL_COMPILE_ACTIVE_LOG_LEVEL=${QUILL_ACTIVE_LOG_LEVEL_DEFINE}
+    RTS_STRESS_TEST_DEMO=1
 )
 
 add_executable(objective_b_benchmark

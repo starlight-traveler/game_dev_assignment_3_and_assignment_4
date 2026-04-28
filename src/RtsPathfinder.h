@@ -45,6 +45,19 @@ public:
                                          const BuildingSystem& buildings,
                                          const GridCoord& start_cell,
                                          const GridCoord& goal_cell) const;
+
+    /**
+     * @brief Returns whether a direct world-space segment can stay on traversable cells
+     * @param terrain Terrain data source
+     * @param buildings Building occupancy source
+     * @param start World-space start point
+     * @param goal World-space end point
+     * @return True when the segment does not cross blocked cells or clipped corners
+     */
+    bool hasLineOfSight(const TerrainGrid& terrain,
+                        const BuildingSystem& buildings,
+                        const glm::vec3& start,
+                        const glm::vec3& goal) const;
 };
 
 #endif

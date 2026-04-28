@@ -97,6 +97,18 @@ public:
      */
     int height() const;
 
+    /**
+     * @brief Returns how many teams currently have fog storage
+     * @return Team count
+     */
+    int teamCount() const;
+
+    /**
+     * @brief Grows the fog storage to track at least this many teams
+     * @param team_count Required team count
+     */
+    void ensureTeamCount(int team_count);
+
 private:
     /**
      * @brief Converts team and cell to flat storage index

@@ -42,6 +42,13 @@ GridCoord expand_index(const TerrainGrid& terrain, int index) {
     return GridCoord{index % terrain.width(), index / terrain.width()};
 }
 
+glm::vec2 world_to_local_grid(const TerrainGrid& terrain, const glm::vec3& position) {
+    const glm::vec2 origin = terrain.origin();
+    const float inverse_cell_size = 1.0f / terrain.cellSize();
+    return glm::vec2((position.x - origin.x) * inverse_cell_size,
+                     (position.z - origin.y) * inverse_cell_size);
+}
+
 float estimate_cost(const GridCoord& current, const GridCoord& goal) {
     // octile distance heuristic matches 8 way movement better than plain manhattan distance
     const float dx = static_cast<float>(std::abs(goal.x - current.x));
@@ -187,5 +194,97 @@ std::vector<glm::vec3> RtsPathfinder::findWorldPath(const TerrainGrid& terrain,
     for (const GridCoord& cell : cell_path) {
         world_path.push_back(terrain.cellCenter(cell));
     }
-    return world_path;
+    if (world_path.size() <= 2) {
+        return world_path;
+    }
+
+    // collapse intermediate waypoints whenever the straight segment stays on traversable cells
+    std::vector<glm::vec3> smoothed_path{};
+    smoothed_path.reserve(world_path.size());
+    std::size_t anchor_index = 0;
+    smoothed_path.push_back(world_path.front());
+    while (anchor_index + 1 < world_path.size()) {
+        std::size_t furthest_visible_index = anchor_index + 1;
+        for (std::size_t candidate_index = world_path.size() - 1;
+             candidate_index > anchor_index + 1;
+             --candidate_index) {
+            if (hasLineOfSight(terrain,
+                               buildings,
+                               world_path[anchor_index],
+                               world_path[candidate_index])) {
+                furthest_visible_index = candidate_index;
+                break;
+            }
+        }
+        smoothed_path.push_back(world_path[furthest_visible_index]);
+        anchor_index = furthest_visible_index;
+    }
+    return smoothed_path;
+}
+
+bool RtsPathfinder::hasLineOfSight(const TerrainGrid& terrain,
+                                   const BuildingSystem& buildings,
+                                   const glm::vec3& start,
+                                   const glm::vec3& goal) const {
+    GridCoord start_cell{};
+    GridCoord goal_cell{};
+    if (!terrain.worldToCell(start, start_cell) ||
+        !terrain.worldToCell(goal, goal_cell) ||
+        !is_traversable(terrain, buildings, start_cell) ||
+        !is_traversable(terrain, buildings, goal_cell)) {
+        return false;
+    }
+    if (start_cell.x == goal_cell.x && start_cell.y == goal_cell.y) {
+        return true;
+    }
+
+    const glm::vec2 start_grid = world_to_local_grid(terrain, start);
+    const glm::vec2 goal_grid = world_to_local_grid(terrain, goal);
+    const glm::vec2 delta = goal_grid - start_grid;
+    const float infinity = std::numeric_limits<float>::infinity();
+    const float epsilon = 0.00001f;
+
+    GridCoord current = start_cell;
+    const int step_x = delta.x > 0.0f ? 1 : (delta.x < 0.0f ? -1 : 0);
+    const int step_y = delta.y > 0.0f ? 1 : (delta.y < 0.0f ? -1 : 0);
+    const float t_delta_x = step_x == 0 ? infinity : 1.0f / std::fabs(delta.x);
+    const float t_delta_y = step_y == 0 ? infinity : 1.0f / std::fabs(delta.y);
+    const float next_boundary_x =
+        step_x > 0 ? std::floor(start_grid.x) + 1.0f : std::floor(start_grid.x);
+    const float next_boundary_y =
+        step_y > 0 ? std::floor(start_grid.y) + 1.0f : std::floor(start_grid.y);
+    float t_max_x =
+        step_x == 0 ? infinity : (next_boundary_x - start_grid.x) / delta.x;
+    float t_max_y =
+        step_y == 0 ? infinity : (next_boundary_y - start_grid.y) / delta.y;
+
+    while (!(current.x == goal_cell.x && current.y == goal_cell.y)) {
+        if (std::fabs(t_max_x - t_max_y) <= epsilon) {
+            const GridCoord side_x{current.x + step_x, current.y};
+            const GridCoord side_y{current.x, current.y + step_y};
+            const GridCoord diagonal{current.x + step_x, current.y + step_y};
+            if (!is_traversable(terrain, buildings, side_x) ||
+                !is_traversable(terrain, buildings, side_y) ||
+                !is_traversable(terrain, buildings, diagonal)) {
+                return false;
+            }
+            current = diagonal;
+            t_max_x += t_delta_x;
+            t_max_y += t_delta_y;
+            continue;
+        }
+
+        if (t_max_x < t_max_y) {
+            current.x += step_x;
+            t_max_x += t_delta_x;
+        } else {
+            current.y += step_y;
+            t_max_y += t_delta_y;
+        }
+
+        if (!is_traversable(terrain, buildings, current)) {
+            return false;
+        }
+    }
+    return true;
 }

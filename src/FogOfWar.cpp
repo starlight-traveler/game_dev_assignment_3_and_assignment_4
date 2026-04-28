@@ -1,5 +1,8 @@
 #include "FogOfWar.h"
 
+#include <algorithm>
+#include <cstddef>
+
 FogOfWar::FogOfWar(int grid_width, int grid_height, int team_count)
     : grid_width_(grid_width),
       grid_height_(grid_height),
@@ -102,4 +105,30 @@ int FogOfWar::width() const {
 
 int FogOfWar::height() const {
     return grid_height_;
+}
+
+int FogOfWar::teamCount() const {
+    return team_count_;
+}
+
+void FogOfWar::ensureTeamCount(int team_count) {
+    if (team_count <= team_count_) {
+        return;
+    }
+
+    const int grid_size = grid_width_ * grid_height_;
+    std::vector<VisibilityState> expanded(
+        static_cast<std::size_t>(team_count * grid_size),
+        VisibilityState::unexplored);
+    for (int team = 0; team < team_count_; ++team) {
+        const auto source_begin =
+            team_visibility_.begin() + static_cast<std::ptrdiff_t>(team * grid_size);
+        const auto source_end = source_begin + static_cast<std::ptrdiff_t>(grid_size);
+        auto dest_begin =
+            expanded.begin() + static_cast<std::ptrdiff_t>(team * grid_size);
+        std::copy(source_begin, source_end, dest_begin);
+    }
+
+    team_visibility_.swap(expanded);
+    team_count_ = team_count;
 }

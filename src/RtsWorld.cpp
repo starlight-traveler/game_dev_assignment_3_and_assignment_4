@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <queue>
 
 namespace {
 constexpr float kMinMoveSpeed = 0.0001f;
@@ -15,12 +16,51 @@ constexpr float kDefaultUnitDamage = 18.0f;
 constexpr float kDefaultUnitAttackCooldown = 0.8f;
 constexpr float kDefaultUnitProjectileSpeed = 8.5f;
 constexpr float kRecentHitDuration = 0.16f;
+constexpr float kCrowdSteeringRange = 1.2f;
+constexpr float kCrowdAvoidanceStrength = 1.15f;
+constexpr float kCrowdSideBias = 0.55f;
+constexpr float kCrowdSeparationPadding = 0.92f;
+constexpr float kCrowdPositionEpsilon = 0.0001f;
+constexpr float kWaypointReachRadius = 0.14f;
+constexpr float kArrivalSlowRadiusPadding = 0.85f;
+constexpr float kMinArrivalStepScale = 0.32f;
+constexpr float kFormationOccupancySearchRadius = 1.2f;
+constexpr float kOrderMatchPositionEpsilon = 0.18f;
 constexpr float kMinBuildingHealth = 1.0f;
 constexpr float kMinBuildTime = 0.01f;
 constexpr float kConstructionStartHealthRatio = 0.1f;
 
 float planar_distance(const glm::vec3& a, const glm::vec3& b) {
     return glm::length(glm::vec2(a.x - b.x, a.z - b.z));
+}
+
+bool nearly_same_point(const glm::vec3& lhs, const glm::vec3& rhs, float epsilon) {
+    return planar_distance(lhs, rhs) <= epsilon &&
+           std::fabs(lhs.y - rhs.y) <= epsilon;
+}
+
+bool orders_match_for_replacement(const RtsOrder& lhs, const RtsOrder& rhs) {
+    return lhs.type == rhs.type &&
+           lhs.target_unit_id == rhs.target_unit_id &&
+           lhs.target_resource_node_id == rhs.target_resource_node_id &&
+           lhs.target_building_id == rhs.target_building_id &&
+           lhs.preserve_formation == rhs.preserve_formation &&
+           nearly_same_point(lhs.target_position, rhs.target_position, kOrderMatchPositionEpsilon) &&
+           nearly_same_point(lhs.secondary_target_position, rhs.secondary_target_position, kOrderMatchPositionEpsilon) &&
+           nearly_same_point(lhs.formation_offset, rhs.formation_offset, kOrderMatchPositionEpsilon) &&
+           std::fabs(lhs.move_speed - rhs.move_speed) <= 0.05f &&
+           std::fabs(lhs.arrival_radius - rhs.arrival_radius) <= 0.05f;
+}
+
+float combat_role_damage_multiplier(RtsCombatRole attacker, RtsCombatRole target) {
+    if (attacker == RtsCombatRole::worker || target == RtsCombatRole::worker || attacker == target) {
+        return 1.0f;
+    }
+    const bool has_counter =
+        (attacker == RtsCombatRole::assault && target == RtsCombatRole::skirmisher) ||
+        (attacker == RtsCombatRole::skirmisher && target == RtsCombatRole::artillery) ||
+        (attacker == RtsCombatRole::artillery && target == RtsCombatRole::assault);
+    return has_counter ? 1.35f : 0.82f;
 }
 
 glm::vec3 snapped_target_position(const TerrainGrid& terrain,
@@ -191,6 +231,7 @@ bool RtsWorld::addUnit(std::uint32_t unit_id,
     unit.attack_cooldown = kDefaultUnitAttackCooldown;
     unit.attack_cooldown_remaining = 0.0f;
     unit.projectile_speed = kDefaultUnitProjectileSpeed;
+    unit.combat_role = RtsCombatRole::assault;
     unit.harvest_cooldown = 0.0f;
     unit.harvest_cooldown_remaining = 0.0f;
     unit.recent_hit_timer = 0.0f;
@@ -240,6 +281,7 @@ bool RtsWorld::addUnitFromArchetype(std::uint32_t unit_id,
     unit->attack_cooldown = archetype->attack_cooldown;
     unit->attack_cooldown_remaining = 0.0f;
     unit->projectile_speed = archetype->projectile_speed;
+    unit->combat_role = archetype->combat_role;
     unit->harvest_cooldown = archetype->harvest_cooldown;
     unit->harvest_cooldown_remaining = 0.0f;
     return true;
@@ -1080,13 +1122,26 @@ bool RtsWorld::isBuildingVisibleToTeam(int team, std::uint32_t building_id) cons
 }
 
 void RtsWorld::updateFogOfWar() {
-    for (int team = 0; team < 2; ++team) {
+    int required_team_count = fog_.teamCount();
+    for (const auto& entry : units_) {
+        if (entry.second.team >= 0) {
+            required_team_count = std::max(required_team_count, entry.second.team + 1);
+        }
+    }
+    for (const auto& entry : owned_buildings_) {
+        if (entry.second.team >= 0) {
+            required_team_count = std::max(required_team_count, entry.second.team + 1);
+        }
+    }
+    fog_.ensureTeamCount(required_team_count);
+
+    for (int team = 0; team < fog_.teamCount(); ++team) {
         fog_.clearCurrentVision(team);
     }
 
     for (const auto& entry : units_) {
         const UnitState& unit = entry.second;
-        if (unit.team < 0 || unit.team >= 2) {
+        if (unit.team < 0 || unit.team >= fog_.teamCount()) {
             continue;
         }
         GridCoord unit_cell{};
@@ -1101,7 +1156,7 @@ void RtsWorld::updateFogOfWar() {
 
     for (const auto& entry : owned_buildings_) {
         const OwnedBuildingState& building = entry.second;
-        if (building.team < 0 || building.team >= 2) {
+        if (building.team < 0 || building.team >= fog_.teamCount()) {
             continue;
         }
         const BuildingInstance* instance = buildings_.findBuilding(building.building_id);
@@ -1234,6 +1289,10 @@ bool RtsWorld::issueOrder(std::uint32_t unit_id,
 
     unit->holding_position = false;
     if (!queue_when_busy) {
+        if (unit->active_order.has_value() &&
+            orders_match_for_replacement(unit->active_order.value(), sanitized)) {
+            return true;
+        }
         // replace the current command immediately
         // this is the common rts behavior for a fresh right click command
         unit->order_queue.clear();
@@ -1305,28 +1364,45 @@ bool RtsWorld::issueFormationOrder(const std::vector<std::uint32_t>& unit_ids,
     const std::size_t columns = static_cast<std::size_t>(
         std::ceil(std::sqrt(static_cast<float>(ordered_units.size()))));
     const std::size_t rows = (ordered_units.size() + columns - 1) / columns;
-    const float start_x = -0.5f * static_cast<float>(columns - 1) * spacing;
-    const float start_z = -0.5f * static_cast<float>(rows - 1) * spacing;
+    const float start_lateral = -0.5f * static_cast<float>(columns - 1) * spacing;
+    const float start_depth = -0.5f * static_cast<float>(rows - 1) * spacing;
+    glm::vec3 current_center(0.0f);
+    for (const UnitState* unit : ordered_units) {
+        current_center += unit->position;
+    }
+    current_center /= static_cast<float>(ordered_units.size());
+
+    glm::vec2 forward_xz(center.x - current_center.x, center.z - current_center.z);
+    if (glm::dot(forward_xz, forward_xz) <= kCrowdPositionEpsilon * kCrowdPositionEpsilon) {
+        forward_xz = glm::vec2(0.0f, 1.0f);
+    } else {
+        forward_xz = glm::normalize(forward_xz);
+    }
+    const glm::vec2 right_xz(-forward_xz.y, forward_xz.x);
 
     bool any_accepted = false;
     for (std::size_t index = 0; index < ordered_units.size(); ++index) {
         const std::size_t row = index / columns;
         const std::size_t column = index % columns;
         // each unit gets a slot offset from the requested formation center
+        const float lateral = start_lateral + static_cast<float>(column) * spacing;
+        const float depth = start_depth + static_cast<float>(row) * spacing;
         const glm::vec3 offset(
-            start_x + static_cast<float>(column) * spacing,
+            right_xz.x * lateral + forward_xz.x * depth,
             0.0f,
-            start_z + static_cast<float>(row) * spacing);
+            right_xz.y * lateral + forward_xz.y * depth);
         const UnitState& unit = *ordered_units[index];
         any_accepted |= issueOrder(unit.unit_id, RtsOrder{
             order_type,
-            center + offset,
+            center,
             glm::vec3(0.0f),
             target_unit_id,
             unit.move_speed,
             unit.radius + 0.08f,
             0,
-            target_building_id
+            target_building_id,
+            offset,
+            true
         }, queue_when_busy);
     }
     return any_accepted;
@@ -1544,7 +1620,20 @@ void RtsWorld::update(float delta_seconds) {
             unitSnapshots(),
             buildingSnapshots(),
             productionSnapshots(),
-            resourceNodeSnapshots()
+            resourceNodeSnapshots(),
+            glm::vec2(terrain_.cellCenter(GridCoord{0, 0}).x,
+                      terrain_.cellCenter(GridCoord{0, 0}).z),
+            glm::vec2(terrain_.cellCenter(GridCoord{terrain_.width() - 1, terrain_.height() - 1}).x,
+                      terrain_.cellCenter(GridCoord{terrain_.width() - 1, terrain_.height() - 1}).z),
+            [this](int team, const RtsWorldUnitSnapshot& unit) {
+                return unit.team == team || isUnitVisibleToTeam(team, unit.unit_id);
+            },
+            [this](int team, const RtsWorldBuildingSnapshot& building) {
+                return building.team == team || isBuildingVisibleToTeam(team, building.building_id);
+            },
+            [this](int team, const RtsWorldResourceNodeSnapshot& node) {
+                return cellVisibilityForTeam(team, node.cell) != VisibilityState::unexplored;
+            }
         });
     for (const RtsAiCommand& command : ai_commands) {
         // translate abstract ai commands back into the same public command helpers used elsewhere
@@ -1634,6 +1723,8 @@ void RtsWorld::update(float delta_seconds) {
         updateActiveOrder(unit, delta_seconds);
     }
 
+    applyCrowdSeparation();
+
     cleanupDestroyedEntities();
     emitMatchEndedEventIfNeeded();
 }
@@ -1646,17 +1737,56 @@ bool RtsWorld::isCellTraversable(const GridCoord& cell) const {
 }
 
 bool RtsWorld::findNearestTraversableCell(const GridCoord& start_cell, GridCoord& out_cell) const {
-    // small outward search used when the requested goal cell is blocked
-    for (int radius = 0; radius <= 4; ++radius) {
-        for (int y = -radius; y <= radius; ++y) {
-            for (int x = -radius; x <= radius; ++x) {
-                const GridCoord candidate{start_cell.x + x, start_cell.y + y};
-                if (!isCellTraversable(candidate)) {
-                    continue;
-                }
+    if (!terrain_.isValidCell(start_cell)) {
+        return false;
+    }
+    if (isCellTraversable(start_cell)) {
+        out_cell = start_cell;
+        return true;
+    }
+
+    const int width = terrain_.width();
+    const int height = terrain_.height();
+    const auto flatten_index = [width](const GridCoord& cell) {
+        return cell.y * width + cell.x;
+    };
+    std::vector<bool> visited(static_cast<std::size_t>(width * height), false);
+    std::queue<GridCoord> frontier{};
+    frontier.push(start_cell);
+    visited[static_cast<std::size_t>(flatten_index(start_cell))] = true;
+
+    // cardinals are explored before diagonals so blocked targets resolve to the closest usable ring first
+    static const GridCoord kNeighbors[] = {
+        GridCoord{0, -1},
+        GridCoord{1, 0},
+        GridCoord{0, 1},
+        GridCoord{-1, 0},
+        GridCoord{1, -1},
+        GridCoord{1, 1},
+        GridCoord{-1, 1},
+        GridCoord{-1, -1}
+    };
+
+    while (!frontier.empty()) {
+        const GridCoord current = frontier.front();
+        frontier.pop();
+        for (const GridCoord& delta : kNeighbors) {
+            const GridCoord candidate{current.x + delta.x, current.y + delta.y};
+            if (!terrain_.isValidCell(candidate)) {
+                continue;
+            }
+
+            const std::size_t candidate_index =
+                static_cast<std::size_t>(flatten_index(candidate));
+            if (visited[candidate_index]) {
+                continue;
+            }
+            visited[candidate_index] = true;
+            if (isCellTraversable(candidate)) {
                 out_cell = candidate;
                 return true;
             }
+            frontier.push(candidate);
         }
     }
     return false;
@@ -1728,13 +1858,200 @@ bool RtsWorld::assignPath(UnitState& unit,
     return true;
 }
 
+glm::vec3 RtsWorld::resolveOrderTarget(const UnitState& unit,
+                                       const RtsOrder& order,
+                                       const glm::vec3& base_target) const {
+    if (!order.preserve_formation) {
+        return base_target;
+    }
+
+    glm::vec3 desired_target = base_target + order.formation_offset;
+    const float search_radius =
+        std::max(kFormationOccupancySearchRadius, order.arrival_radius + unit.radius * 2.0f);
+    if (planar_distance(unit.position, desired_target) <= search_radius * 2.0f) {
+        desired_target = findNearbyOccupancyTarget(unit, desired_target, search_radius);
+    }
+    return desired_target;
+}
+
+glm::vec3 RtsWorld::findNearbyOccupancyTarget(const UnitState& unit,
+                                              const glm::vec3& desired_target,
+                                              float search_radius) const {
+    auto elevated_candidate = [this](glm::vec3 candidate) {
+        GridCoord cell{};
+        if (terrain_.worldToCell(candidate, cell)) {
+            candidate.y = terrain_.elevation(cell);
+        }
+        return candidate;
+    };
+
+    const glm::vec3 resolved_target = elevated_candidate(desired_target);
+    if (canOccupyPosition(unit, resolved_target)) {
+        return resolved_target;
+    }
+
+    const float base_angle =
+        static_cast<float>((unit.unit_id * 37U) % 360U) * 0.01745329252f;
+    const float radii[] = {
+        std::max(unit.radius * 0.9f, 0.2f),
+        std::max(unit.radius * 1.8f, 0.45f),
+        std::max(unit.radius * 2.6f, 0.75f),
+        search_radius
+    };
+    for (const float radius : radii) {
+        for (int step = 0; step < 8; ++step) {
+            const float angle =
+                base_angle + static_cast<float>(step) * 0.78539816339f;
+            glm::vec3 candidate = resolved_target;
+            candidate.x += std::cos(angle) * radius;
+            candidate.z += std::sin(angle) * radius;
+            candidate = elevated_candidate(candidate);
+            if (canOccupyPosition(unit, candidate)) {
+                return candidate;
+            }
+        }
+    }
+    return resolved_target;
+}
+
+glm::vec2 RtsWorld::computeCrowdSteeringDirection(const UnitState& unit,
+                                                  const glm::vec2& preferred_direction) const {
+    glm::vec2 steering = preferred_direction;
+    const glm::vec2 preferred_side(-preferred_direction.y, preferred_direction.x);
+    float total_weight = 1.0f;
+
+    for (const auto& entry : units_) {
+        const UnitState& other = entry.second;
+        if (other.unit_id == unit.unit_id || other.health <= 0.0f) {
+            continue;
+        }
+
+        const glm::vec2 offset(unit.position.x - other.position.x,
+                               unit.position.z - other.position.z);
+        const float distance = glm::length(offset);
+        const float influence_radius =
+            unit.radius + other.radius + kCrowdSteeringRange;
+        if (distance <= kCrowdPositionEpsilon || distance >= influence_radius) {
+            continue;
+        }
+
+        const glm::vec2 away = offset / distance;
+        const float closeness = (influence_radius - distance) / influence_radius;
+        const float lateral_sign = glm::dot(preferred_side, away) >= 0.0f ? 1.0f : -1.0f;
+        steering += away * (closeness * kCrowdAvoidanceStrength);
+        steering += preferred_side * (lateral_sign * closeness * kCrowdSideBias);
+        total_weight += closeness;
+    }
+
+    if (glm::dot(steering, steering) <= kCrowdPositionEpsilon * kCrowdPositionEpsilon) {
+        return preferred_direction;
+    }
+    steering /= total_weight;
+    return glm::normalize(steering);
+}
+
+bool RtsWorld::canOccupyPosition(const UnitState& unit, const glm::vec3& position) const {
+    GridCoord occupied_cell{};
+    if (!terrain_.worldToCell(position, occupied_cell) || !isCellTraversable(occupied_cell)) {
+        return false;
+    }
+
+    for (const auto& entry : units_) {
+        const UnitState& other = entry.second;
+        if (other.unit_id == unit.unit_id || other.health <= 0.0f) {
+            continue;
+        }
+        const float minimum_distance =
+            (unit.radius + other.radius) * kCrowdSeparationPadding * 0.75f;
+        if (planar_distance(position, other.position) < minimum_distance) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void RtsWorld::applyCrowdSeparation() {
+    std::vector<std::uint32_t> unit_ids{};
+    unit_ids.reserve(units_.size());
+    for (const auto& entry : units_) {
+        if (entry.second.health > 0.0f) {
+            unit_ids.push_back(entry.first);
+        }
+    }
+    std::sort(unit_ids.begin(), unit_ids.end());
+
+    for (std::size_t i = 0; i < unit_ids.size(); ++i) {
+        for (std::size_t j = i + 1; j < unit_ids.size(); ++j) {
+            UnitState* first = findUnit(unit_ids[i]);
+            UnitState* second = findUnit(unit_ids[j]);
+            if (!first || !second || first->health <= 0.0f || second->health <= 0.0f) {
+                continue;
+            }
+
+            const glm::vec2 delta(first->position.x - second->position.x,
+                                  first->position.z - second->position.z);
+            const float distance = glm::length(delta);
+            const float minimum_distance =
+                (first->radius + second->radius) * kCrowdSeparationPadding;
+            if (distance >= minimum_distance) {
+                continue;
+            }
+
+            const glm::vec2 normal =
+                distance > kCrowdPositionEpsilon
+                    ? delta / distance
+                    : glm::normalize(glm::vec2(
+                          ((first->unit_id + second->unit_id) % 2U) == 0U ? 1.0f : -1.0f,
+                          ((first->unit_id ^ second->unit_id) % 2U) == 0U ? 0.6f : -0.6f));
+            const float overlap = minimum_distance - distance;
+
+            const bool first_mobile = first->moving || first->active_order.has_value();
+            const bool second_mobile = second->moving || second->active_order.has_value();
+            float first_share = 0.5f;
+            float second_share = 0.5f;
+            if (first_mobile && !second_mobile) {
+                first_share = 1.0f;
+                second_share = 0.0f;
+            } else if (!first_mobile && second_mobile) {
+                first_share = 0.0f;
+                second_share = 1.0f;
+            }
+
+            const glm::vec2 first_push = normal * (overlap * first_share);
+            const glm::vec2 second_push = -normal * (overlap * second_share);
+
+            auto try_push = [this](UnitState& unit, const glm::vec2& push) {
+                const float attempts[] = {1.0f, 0.6f, 0.3f};
+                for (const float scale : attempts) {
+                    glm::vec3 candidate = unit.position;
+                    candidate.x += push.x * scale;
+                    candidate.z += push.y * scale;
+                    GridCoord cell{};
+                    if (terrain_.worldToCell(candidate, cell)) {
+                        candidate.y = terrain_.elevation(cell);
+                    }
+                    if (canOccupyPosition(unit, candidate)) {
+                        unit.position = candidate;
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            try_push(*first, first_push);
+            try_push(*second, second_push);
+        }
+    }
+}
+
 bool RtsWorld::moveUnitToward(UnitState& unit,
                               const glm::vec3& target_position,
                               float move_speed,
                               float arrival_radius,
-                              float delta_seconds) {
+                              float delta_seconds,
+                              bool smooth_arrival) {
     if (planar_distance(unit.position, target_position) <= arrival_radius) {
-        // close enough means finish immediately and snap y back to terrain elevation
+        // close enough means finish immediately without forcing a last positional snap
         GridCoord cell{};
         if (terrain_.worldToCell(unit.position, cell)) {
             unit.position.y = terrain_.elevation(cell);
@@ -1760,15 +2077,37 @@ bool RtsWorld::moveUnitToward(UnitState& unit,
             return false;
         }
     }
+    if (unit.path_index < unit.path_points.size() &&
+        !pathfinder_.hasLineOfSight(terrain_,
+                                    buildings_,
+                                    unit.position,
+                                    unit.path_points[unit.path_index])) {
+        if (!assignPath(unit, target_position, arrival_radius)) {
+            clearUnitMotion(unit);
+            return false;
+        }
+    }
 
     while (unit.path_index < unit.path_points.size()) {
         const glm::vec3 waypoint = unit.path_points[unit.path_index];
-        const glm::vec3 to_waypoint = waypoint - unit.position;
-        const float distance_to_waypoint = glm::length(to_waypoint);
-        if (distance_to_waypoint <= arrival_radius) {
-            // consume already reached waypoints in the same frame before spending movement on the next one
-            unit.position = waypoint;
+        const bool final_waypoint = unit.path_index + 1 >= unit.path_points.size();
+        const glm::vec2 to_waypoint_xz(waypoint.x - unit.position.x,
+                                       waypoint.z - unit.position.z);
+        const float distance_to_waypoint = glm::length(to_waypoint_xz);
+        const float waypoint_reach_radius =
+            final_waypoint ? arrival_radius
+                           : std::min(arrival_radius, std::max(kWaypointReachRadius, unit.radius * 0.4f));
+        if (distance_to_waypoint <= waypoint_reach_radius) {
+            // consume already reached waypoints in the same frame without forcing a visible snap
             ++unit.path_index;
+            if (final_waypoint) {
+                GridCoord cell{};
+                if (terrain_.worldToCell(unit.position, cell)) {
+                    unit.position.y = terrain_.elevation(cell);
+                }
+                clearUnitMotion(unit);
+                return true;
+            }
             continue;
         }
 
@@ -1782,14 +2121,58 @@ bool RtsWorld::moveUnitToward(UnitState& unit,
         // terrain cost slows the effective distance the unit can move this frame
         // roads feel faster because their cost is smaller while forests and rough ground feel slower
         const float max_step = (move_speed / terrain_cost) * delta_seconds;
-        if (max_step >= distance_to_waypoint) {
+        float applied_step = max_step;
+        if (smooth_arrival && final_waypoint) {
+            const float slow_radius =
+                std::max(arrival_radius + kArrivalSlowRadiusPadding, unit.radius * 3.0f);
+            if (distance_to_waypoint < slow_radius) {
+                const float blend =
+                    std::clamp((distance_to_waypoint - arrival_radius) /
+                                   std::max(slow_radius - arrival_radius, 0.001f),
+                               kMinArrivalStepScale,
+                               1.0f);
+                applied_step *= blend;
+            }
+        }
+
+        if (applied_step >= distance_to_waypoint) {
             // if we can fully reach the waypoint this frame snap exactly onto it
             unit.position = waypoint;
             ++unit.path_index;
         } else {
-            // otherwise advance partway toward the waypoint along the normalized direction
-            const glm::vec3 direction = to_waypoint / distance_to_waypoint;
-            unit.position += direction * max_step;
+            // otherwise advance partway toward the waypoint and bias away from nearby units
+            const glm::vec2 preferred_direction = to_waypoint_xz / distance_to_waypoint;
+            glm::vec2 direction_xz =
+                computeCrowdSteeringDirection(unit, preferred_direction);
+            const auto candidate_from_direction =
+                [&](const glm::vec2& direction) {
+                    glm::vec3 candidate = unit.position;
+                    candidate.x += direction.x * applied_step;
+                    candidate.z += direction.y * applied_step;
+                    GridCoord cell{};
+                    if (terrain_.worldToCell(candidate, cell)) {
+                        candidate.y = terrain_.elevation(cell);
+                    }
+                    return candidate;
+                };
+
+            glm::vec3 candidate = candidate_from_direction(direction_xz);
+            bool moved = false;
+            if (canOccupyPosition(unit, candidate)) {
+                unit.position = candidate;
+                moved = true;
+            } else {
+                direction_xz = preferred_direction;
+                candidate = candidate_from_direction(direction_xz);
+                if (canOccupyPosition(unit, candidate)) {
+                    unit.position = candidate;
+                    moved = true;
+                }
+            }
+            if (!moved) {
+                unit.moving = false;
+                return false;
+            }
         }
 
         GridCoord resolved_cell{};
@@ -1826,7 +2209,9 @@ bool RtsWorld::tryAttackUnit(UnitState& attacker, const UnitState& target) {
                                  attacker.team,
                                  attacker.position,
                                  attacker.projectile_speed,
-                                 attacker.attack_damage,
+                                 attacker.attack_damage *
+                                     combat_role_damage_multiplier(attacker.combat_role,
+                                                                   target.combat_role),
                                  false,
                                  combat_events_)) {
         return false;
@@ -2230,7 +2615,12 @@ void RtsWorld::updateActiveOrder(UnitState& unit, float delta_seconds) {
     auto engage_enemy = [&](const UnitState& enemy) {
         // tryAttackUnit returns false only when we are out of range or could not spawn the projectile
         if (!tryAttackUnit(unit, enemy)) {
-            moveUnitToward(unit, enemy.position, move_speed, unit.attack_range, delta_seconds);
+            moveUnitToward(unit,
+                           resolveOrderTarget(unit, order, enemy.position),
+                           move_speed,
+                           unit.attack_range,
+                           delta_seconds,
+                           order.preserve_formation);
         } else {
             // once in valid attack posture stop moving so we do not overshoot through the target
             clearUnitMotion(unit);
@@ -2245,11 +2635,12 @@ void RtsWorld::updateActiveOrder(UnitState& unit, float delta_seconds) {
         if (!tryAttackBuilding(unit, building)) {
             // for buildings use a larger arrival threshold based on the footprint radius
             moveUnitToward(unit,
-                           center,
+                           resolveOrderTarget(unit, order, center),
                            move_speed,
                            std::max(unit.attack_range,
                                     unit.attack_range + buildingInteractionRadius(*building_instance)),
-                           delta_seconds);
+                           delta_seconds,
+                           order.preserve_formation);
         } else {
             clearUnitMotion(unit);
         }
@@ -2258,7 +2649,12 @@ void RtsWorld::updateActiveOrder(UnitState& unit, float delta_seconds) {
     switch (order.type) {
     case RtsOrderType::move:
         // pure move finishes and clears itself on arrival
-        if (moveUnitToward(unit, order.target_position, move_speed, arrival_radius, delta_seconds)) {
+        if (moveUnitToward(unit,
+                           resolveOrderTarget(unit, order, order.target_position),
+                           move_speed,
+                           arrival_radius,
+                           delta_seconds,
+                           order.preserve_formation)) {
             unit.active_order = std::nullopt;
         }
         return;
@@ -2306,7 +2702,12 @@ void RtsWorld::updateActiveOrder(UnitState& unit, float delta_seconds) {
             }
         }
 
-        if (moveUnitToward(unit, order.target_position, move_speed, arrival_radius, delta_seconds)) {
+        if (moveUnitToward(unit,
+                           resolveOrderTarget(unit, order, order.target_position),
+                           move_speed,
+                           arrival_radius,
+                           delta_seconds,
+                           order.preserve_formation)) {
             // when the final positional target is reached the attack move order completes
             unit.active_order = std::nullopt;
         }
