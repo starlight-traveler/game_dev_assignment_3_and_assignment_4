@@ -995,8 +995,6 @@ The main challenge was avoiding a single file where input, AI, combat, rendering
 
 ## Production Challenges
 
-The hardest part of producing the final product was not one isolated algorithm. The hard part was making many systems cooperate without losing track of ownership.
-
 | Challenge | Why it was hard | Project response |
 | --- | --- | --- |
 | Many systems needed the same state | Units, AI, UI, combat, fog, and rendering all care about unit and building state. | Keep authoritative mutable state in `RtsWorld`; expose snapshots for reading. |
