@@ -10,7 +10,7 @@ This document summarizes the custom RTS engine project, its development challeng
 
 <nav class="presentation-tabs" aria-label="Presentation sections">
   <a href="#presentation-timeline">Timeline</a>
-  <a href="#project-thesis">Thesis</a>
+  <a href="#rts-engine-project-idea">Idea</a>
   <a href="#project">Project</a>
   <a href="#live-demonstration-sequence">Demo Sequence</a>
   <a href="#demo-catalog">Demos</a>
@@ -54,7 +54,7 @@ The timeline structures the 15 minute technical walkthrough. Each section introd
 
 </details>
 
-## RTS Custom Engine - Project Thesis
+## RTS Engine Project Thesis
 
 This project extends the assignment engine into a custom RTS engine workflow. It incorproates economny, AI path planning, and further systems that demosntrate the capability of the engine. No attempt was really bad to optimize anything, and mostly focused on getting a game to work, via simple programmer art.
 
