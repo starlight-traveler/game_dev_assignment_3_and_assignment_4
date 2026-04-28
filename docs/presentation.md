@@ -204,36 +204,10 @@ Use `./run_demo.sh` to launch the selector.
 | `tool_pipeline_demo` | Asset/tool/render workflow observation. | `.meshbin` discovery, optional `.animbin` loading, `Shape` creation, animation matrices, scene graph submission, and deferred rendering. |
 | `doom_demo` | Separate gameplay style on the same engine base. | Reusable mesh, renderer, scene graph, sound, and input systems applied outside the RTS format. |
 
-The two newest observation demos cover specific rubric needs:
-
-```text
-Economy Race Demo
-  -> workers
-  -> resource nodes
-  -> dropoff buildings
-  -> team ore balances
-  -> production queues
-  -> supply scaling
-```
-
-```text
-Tool Pipeline Demo
-  -> Blender asset
-  -> meshbin / animbin export
-  -> MeshDiscovery
-  -> MeshLoader / AnimationClip
-  -> RenderCommand
-  -> DeferredRenderer
-```
-
 <details class="speaker-notes" markdown="1">
 <summary>Speaking Notes</summary>
 
 The focused demos separate complex engine behavior into observable scenarios. A full RTS match is useful, but it can hide the details of individual systems.
-
-The Economy Race demo removes combat pressure so the resource loop is clear: workers harvest, return to depots, ore changes, production queues fill, supply matters, and both teams scale over time.
-
-The Tool Pipeline demo focuses on the asset-to-render path. Exported mesh and animation data come from Blender, the runtime discovers and loads those files, the engine creates renderable shapes, animation sidecars produce matrices when available, and the deferred renderer draws the final scene.
 
 </details>
 
